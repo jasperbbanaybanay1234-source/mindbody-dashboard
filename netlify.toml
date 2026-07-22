@@ -1,0 +1,32 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+[functions]
+  node_bundler = "esbuild"
+
+[functions."mb-onboarding"]
+  timeout = 26
+
+[functions."mb-pt-analytics"]
+  timeout = 26
+
+[functions."mb-snapshot"]
+  timeout = 26
+
+[functions."scheduled-daily-refresh"]
+  timeout = 26
+
+[dev]
+  command = "vite"
+  port = 8888
+  targetPort = 5173
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
