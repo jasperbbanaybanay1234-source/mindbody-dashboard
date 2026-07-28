@@ -19,7 +19,7 @@
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
 import { subDays, addDays, endOfDay, format, parseISO, startOfWeek, endOfWeek, subWeeks } from 'date-fns';
 
-const BATCH = 15;
+const BATCH = 40; // raised from 15 - classvisits calls are the real bottleneck on real data volume
 
 // Statuses that are NOT a suspension — exclude from suspensions list
 // 'declined' is handled separately under finances
