@@ -1,9 +1,15 @@
 /**
  * 28-day rolling window, split into 4 weekly buckets.
- * Supports ?period=7days (default) or ?period=calendarWeek (last Mon–Sun)
+ * Supports ?period=7days (default) or ?period=calendarWeek (last Mon–Sun).
+ * NOTE: ?period only affects fringe / no-shows / stats. Red's List and the
+ * Orange Flag list always use their own fixed, Monday-anchored windows.
  *
  * Returns:
- *   reds        – visited W2–W4 but NOT W1 (Red's List = inactive + churning)
+ *   reds        – visited in the 3 weeks before the last completed Mon–Sun week
+ *                 but NOT during that week (Red's List = inactive + churning).
+ *                 Window is ALWAYS the most recently completed Mon–Sun week.
+ *   orangeFlag  – active clients who attended in the last 4 completed weeks but
+ *                 have zero visits Mon–Wed of the CURRENT (in-progress) week.
  *   fringe      – visited W1, segmented by count (atRisk/engaged)
  *                 each client carries: sessionsThisWeek, trend, service, isFullyUtilising
  *   noShows     – clients with unsigned bookings in W1 window
@@ -11,7 +17,7 @@
  *                 (excludes Terminated, Expired, Non Member)
  */
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
-import { subDays, endOfDay, format, parseISO, startOfWeek, endOfWeek, subWeeks } from 'date-fns';
+import { subDays, addDays, endOfDay, format, parseISO, startOfWeek, endOfWeek, subWeeks } from 'date-fns';
 
 const BATCH = 15;
 
@@ -127,7 +133,7 @@ export const handler = async (event) => {
     const now    = new Date();
     const period = event.queryStringParameters?.period || '7days';
 
-    // ── W1 window ──────────────────────────────────────────────────────────
+    // ── W1 window (period-driven — drives fringe, no-shows and stats) ──────
     let w1Start, w1End;
     if (period === 'calendarWeek') {
       w1Start = startOfWeek(subWeeks(now, 1), { weekStartsOn: 1 });
@@ -143,13 +149,31 @@ export const handler = async (event) => {
     const b21 = subDays(w1Start, 14);
     const b28 = subDays(w1Start, 21);
 
-    const startStr = format(b28,   "yyyy-MM-dd'T'00:00:00");
-    const endStr   = format(w1End, "yyyy-MM-dd'T'23:59:59");
+    // ── Red's List window — ALWAYS the most recently completed Mon–Sun week ─
+    // (independent of ?period so the list is stable for everyone who opens it)
+    const rw1Start = startOfWeek(subWeeks(now, 1), { weekStartsOn: 1 });
+    const rw1End   = endOfWeek(subWeeks(now, 1),   { weekStartsOn: 1 });
+    const rb14 = subDays(rw1Start, 7);
+    const rb21 = subDays(rw1Start, 14);
+    const rb28 = subDays(rw1Start, 21);
+
+    // ── Orange Flag window — Mon 00:00 → Wed 23:59 of the CURRENT week ─────
+    const ofStart = startOfWeek(now, { weekStartsOn: 1 });
+    const ofEnd   = endOfDay(addDays(ofStart, 2));
+
+    // Fetch wide enough to cover every window above
+    const fetchStart = [b28, rb28, ofStart].reduce((min, d) => (d < min ? d : min));
+    const fetchEnd   = [w1End, rw1End, ofEnd, now].reduce((max, d) => (d > max ? d : max));
+
+    const startStr = format(fetchStart, "yyyy-MM-dd'T'00:00:00");
+    const endStr   = format(fetchEnd,   "yyyy-MM-dd'T'23:59:59");
 
     const allClasses = await getClasses(token, startStr, endStr);
 
     // Per-client data structures
-    const weeks         = {};  // id → { w1, w2, w3, w4 }
+    const weeks         = {};  // id → { w1, w2, w3, w4 }  (period-driven buckets)
+    const redWeeks      = {};  // id → { w1, w2, w3, w4 }  (fixed Mon-anchored buckets)
+    const monWedCount   = {};  // id → visits Mon–Wed of the current week
     const services      = {};  // id → most-recent service name
     const noShowMap     = {};  // id → [{ className, day, time, staffName }]
     const lastVisitDate = {};  // id → most recent signed-in Date
@@ -162,23 +186,41 @@ export const handler = async (event) => {
         if (results[idx].status !== 'fulfilled') return;
         const classDate = parseISO(cls.StartDateTime);
 
-        // Determine week bucket
+        // Determine week bucket (period-driven windows)
         const inW1 = classDate >= w1Start && classDate <= w1End;
-        const inW2 = !inW1 && classDate > b14;
-        const inW3 = !inW1 && !inW2 && classDate > b21;
-        const inW4 = !inW1 && !inW2 && !inW3 && classDate > b28;
+        const inW2 = !inW1 && classDate > b14  && classDate <= w1End;
+        const inW3 = !inW1 && !inW2 && classDate > b21 && classDate <= w1End;
+        const inW4 = !inW1 && !inW2 && !inW3 && classDate > b28 && classDate <= w1End;
+
+        // Fixed Mon-anchored buckets (Red's List / Orange Flag "was active" test)
+        const inR1 = classDate >= rw1Start && classDate <= rw1End;
+        const inR2 = !inR1 && classDate > rb14 && classDate <= rw1End;
+        const inR3 = !inR1 && !inR2 && classDate > rb21 && classDate <= rw1End;
+        const inR4 = !inR1 && !inR2 && !inR3 && classDate > rb28 && classDate <= rw1End;
+
+        // Mon–Wed of the current, in-progress week
+        const inMonWed = classDate >= ofStart && classDate <= ofEnd;
 
         for (const visit of results[idx].value) {
           const id = String(visit.ClientId || '');
           if (!id) continue;
 
-          if (!weeks[id]) weeks[id] = { w1: 0, w2: 0, w3: 0, w4: 0 };
+          if (!weeks[id])    weeks[id]    = { w1: 0, w2: 0, w3: 0, w4: 0 };
+          if (!redWeeks[id]) redWeeks[id] = { w1: 0, w2: 0, w3: 0, w4: 0 };
+          if (monWedCount[id] === undefined) monWedCount[id] = 0;
 
           if (visit.SignedIn === true && !visit.LateCancelled) {
             if (inW1) weeks[id].w1++;
             if (inW2) weeks[id].w2++;
             if (inW3) weeks[id].w3++;
             if (inW4) weeks[id].w4++;
+
+            if (inR1) redWeeks[id].w1++;
+            if (inR2) redWeeks[id].w2++;
+            if (inR3) redWeeks[id].w3++;
+            if (inR4) redWeeks[id].w4++;
+
+            if (inMonWed) monWedCount[id]++;
 
             // Track the most recent service name (W1 priority)
             if (inW1 && visit.ServiceName) services[id] = visit.ServiceName;
@@ -207,35 +249,39 @@ export const handler = async (event) => {
     // Fetch all clients for enrichment
     const clientMap = await getAllClients(token);
 
-    function enrichClient(id, extra = {}) {
+    function enrichClient(id, extra = {}, weekSource = weeks) {
       const c   = clientMap[id] || { id, name: `Client ${id}`, email: '', phone: '' };
       const svc = services[id] || '';
-      const w   = weeks[id]   || { w1: 0, w2: 0, w3: 0, w4: 0 };
+      const w   = weekSource[id] || { w1: 0, w2: 0, w3: 0, w4: 0 };
       const t   = trend(w.w1, w.w2, w.w3, w.w4);
       const is2x        = svc.toLowerCase().includes('2x');
       const isFullyUtil = is2x && (extra.sessionsThisWeek ?? w.w1) >= 2;
       const lastDate          = lastVisitDate[id] ? format(lastVisitDate[id], 'yyyy-MM-dd') : null;
       const weeklyAttendance  = { w1: w.w1, w2: w.w2, w3: w.w3, w4: w.w4 };
-      return { ...c, service: svc, trend: t, is2xMember: is2x, isFullyUtilising: isFullyUtil, lastSessionDate: lastDate, weeklyAttendance, ...extra };
+      // `membership` is an alias of `service` (the most recent booked service /
+      // package name) so lists can label it as the client's membership.
+      return { ...c, service: svc, membership: svc, trend: t, is2xMember: is2x, isFullyUtilising: isFullyUtil, lastSessionDate: lastDate, weeklyAttendance, ...extra };
     }
 
-    // Red's List: visited W2–W4 but NOT W1, active contract only, not suspended
-    const visitedW1   = new Set(Object.keys(weeks).filter((id) => weeks[id].w1 > 0));
-    const visitedPrev = new Set(
-      Object.keys(weeks).filter((id) => weeks[id].w2 > 0 || weeks[id].w3 > 0 || weeks[id].w4 > 0)
+    // Only active, non-suspended contract members qualify for Red's / Orange Flag
+    function isActiveMember(id) {
+      const c = clientMap[id];
+      if (!c) return false;
+      if ((c.status || '').toLowerCase() !== 'active') return false;
+      if (c.suspensionInfo && Object.keys(c.suspensionInfo).length > 0) return false;
+      return true;
+    }
+
+    // Red's List: visited R2–R4 but NOT R1, where R1 is ALWAYS the most recently
+    // completed Monday–Sunday week. Active contract only, not suspended.
+    const redVisitedW1 = new Set(Object.keys(redWeeks).filter((id) => redWeeks[id].w1 > 0));
+    const redVisitedPrev = new Set(
+      Object.keys(redWeeks).filter((id) => redWeeks[id].w2 > 0 || redWeeks[id].w3 > 0 || redWeeks[id].w4 > 0)
     );
-    const reds = [...visitedPrev]
-      .filter((id) => !visitedW1.has(id))
-      .filter((id) => {
-        const c = clientMap[id];
-        if (!c) return false;
-        // Active contract members only
-        if ((c.status || '').toLowerCase() !== 'active') return false;
-        // Exclude anyone on a suspension / hold
-        if (c.suspensionInfo && Object.keys(c.suspensionInfo).length > 0) return false;
-        return true;
-      })
-      .map((id) => enrichClient(id, { sessionsThisWeek: 0 }))
+    const reds = [...redVisitedPrev]
+      .filter((id) => !redVisitedW1.has(id))
+      .filter(isActiveMember)
+      .map((id) => enrichClient(id, { sessionsThisWeek: 0 }, redWeeks))
       // Sort: most recently seen first → longest absent last
       .sort((a, b) => {
         if (!a.lastSessionDate && !b.lastSessionDate) return 0;
@@ -243,6 +289,26 @@ export const handler = async (event) => {
         if (!b.lastSessionDate) return -1;
         return b.lastSessionDate.localeCompare(a.lastSessionDate);
       });
+
+    // Orange Flag: previously active (any of the last 4 completed weeks) but ZERO
+    // visits Mon–Wed of the CURRENT week. A mid-week early-warning signal.
+    const orangeFlag = Object.keys(redWeeks)
+      .filter((id) => {
+        const w = redWeeks[id];
+        return w.w1 > 0 || w.w2 > 0 || w.w3 > 0 || w.w4 > 0;
+      })
+      .filter((id) => (monWedCount[id] || 0) === 0)
+      .filter(isActiveMember)
+      .map((id) => enrichClient(id, { sessionsThisWeek: 0, monWedSessions: 0 }, redWeeks))
+      .sort((a, b) => {
+        if (!a.lastSessionDate && !b.lastSessionDate) return 0;
+        if (!a.lastSessionDate) return 1;
+        if (!b.lastSessionDate) return -1;
+        return b.lastSessionDate.localeCompare(a.lastSessionDate);
+      });
+
+    // Existing period-driven W1 sets (fringe / stats)
+    const visitedW1 = new Set(Object.keys(weeks).filter((id) => weeks[id].w1 > 0));
 
     // Fringe (visited W1): atRisk = 1–2, engaged = 3+
     const byCount = (min, max) =>
@@ -329,12 +395,22 @@ export const handler = async (event) => {
     return ok({
       period,
       reds:           reds.slice(0, 150),
+      orangeFlag:     orangeFlag.slice(0, 150),
       fringeSegments,
       noShows,
       suspensions,
       declinedClients,
+      redsWindow: {
+        start: format(rw1Start, 'yyyy-MM-dd'),
+        end:   format(rw1End,   'yyyy-MM-dd'),
+      },
+      orangeFlagWindow: {
+        start: format(ofStart, 'yyyy-MM-dd'),
+        end:   format(ofEnd,   'yyyy-MM-dd'),
+      },
       summary: {
         redsCount:        reds.length,
+        orangeFlagCount:  orangeFlag.length,
         visitedThisWeek:  visitedW1.size,
         noShowCount:      noShows.length,
         suspensionCount:  suspensions.length,

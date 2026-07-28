@@ -1,17 +1,17 @@
 import { useState, useMemo } from 'react';
 import { format, isToday } from 'date-fns';
-import { RefreshCw, Activity, DollarSign, Users2, Dumbbell } from 'lucide-react';
+import { RefreshCw, Activity, DollarSign, Users2 } from 'lucide-react';
 import StatsGrid          from './StatsGrid.jsx';
 import AttendanceChart    from './AttendanceChart.jsx';
 import NoShowsList        from './NoShowsList.jsx';
 import SuspensionsList    from './SuspensionsList.jsx';
 import RedsList           from './RedsList.jsx';
+import OrangeFlagList     from './OrangeFlagList.jsx';
 import FringeClientsTable from './FringeClientsTable.jsx';
 import RevenueCards       from './RevenueCards.jsx';
 import PaymentIssuesTable from './PaymentIssuesTable.jsx';
 import DeclinedList       from './DeclinedList.jsx';
-import OnboardingTab          from './OnboardingTab.jsx';
-import PersonalTrainingTab    from './PersonalTrainingTab.jsx';
+import OnboardingTab       from './OnboardingTab.jsx';
 import CelebrationsPanel   from './CelebrationsPanel.jsx';
 import { useOnboardingRollover } from '../utils/useOnboardingRollover.js';
 
@@ -19,11 +19,11 @@ const TABS = [
   { key: 'operations',        label: 'Operations',        Icon: Activity  },
   { key: 'finances',          label: 'Finances',          Icon: DollarSign },
   { key: 'onboarding',        label: 'Onboarding',        Icon: Users2    },
-  { key: 'personalTraining',  label: 'Personal Training', Icon: Dumbbell  },
 ];
 
-// Short-program products: removed from pipeline on no-rollover
-const SHORT_PRODUCTS = new Set(['3-Session', '14-Day']);
+// Short-program products: removed from pipeline on no-rollover.
+// (Both current onboarding products run the full 28 days, so this is empty.)
+const SHORT_PRODUCTS = new Set();
 
 export default function Dashboard({ data, loading, errors, lastRefresh, onRefresh, contactLog }) {
   const [tab, setTab] = useState('operations');
@@ -63,9 +63,15 @@ export default function Dashboard({ data, loading, errors, lastRefresh, onRefres
       {/* ── Header ── */}
       <header className="sticky top-0 z-30 border-b border-gray-800 bg-gray-900/90 backdrop-blur px-6 py-4">
         <div className="mx-auto max-w-7xl flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-white">Operations Dashboard</h1>
-            <p className="text-xs text-gray-500 mt-0.5">{import.meta.env.VITE_BUSINESS_NAME || 'Your Gym'}</p>
+          <div className="flex items-center gap-3">
+            {/* G3 Fitness logo badge */}
+            <div className="h-9 w-9 shrink-0 rounded-md bg-orange-500 flex items-center justify-center shadow-sm shadow-orange-500/30">
+              <span className="text-sm font-black tracking-tight text-white">G3</span>
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight text-white">Operations Dashboard</h1>
+              <p className="text-xs text-gray-500 mt-0.5">{import.meta.env.VITE_BUSINESS_NAME || 'G3 Fitness'}</p>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             {lastRefresh && (
@@ -95,7 +101,7 @@ export default function Dashboard({ data, loading, errors, lastRefresh, onRefres
                 onClick={() => setTab(key)}
                 className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                   tab === key
-                    ? 'border-emerald-500 text-emerald-400'
+                    ? 'border-orange-500 text-orange-400'
                     : 'border-transparent text-gray-500 hover:text-gray-300 hover:border-gray-700'
                 }`}
               >
@@ -138,6 +144,13 @@ export default function Dashboard({ data, loading, errors, lastRefresh, onRefres
               />
             </div>
             <RedsList
+              data={data.clientAnalytics}
+              loading={loading.clientAnalytics}
+              error={errors.clientAnalytics}
+              contactLog={contactLog}
+              onboardingIds={onboardingIds}
+            />
+            <OrangeFlagList
               data={data.clientAnalytics}
               loading={loading.clientAnalytics}
               error={errors.clientAnalytics}
@@ -187,16 +200,6 @@ export default function Dashboard({ data, loading, errors, lastRefresh, onRefres
             decisions={decisions}
             getDecision={getDecision}
             setDecision={setDecision}
-          />
-        )}
-
-        {/* ─ Personal Training ─ */}
-        {tab === 'personalTraining' && (
-          <PersonalTrainingTab
-            data={data.pt}
-            loading={loading.pt}
-            error={errors.pt}
-            contactLog={contactLog}
           />
         )}
       </main>

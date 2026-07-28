@@ -1,8 +1,16 @@
 import { useState } from 'react';
-import { TrendingDown, Search, CheckCircle, ArrowUp, ArrowDown, ArrowRight, Sparkles, ChevronDown } from 'lucide-react';
+import { Flag, Search, CheckCircle, ArrowUp, ArrowDown, ArrowRight, Sparkles, ChevronDown } from 'lucide-react';
 import { formatDistanceToNow, parseISO, format, differenceInDays } from 'date-fns';
 import ContactModal          from './ContactModal.jsx';
 import WeeklyAttendancePanel from './WeeklyAttendancePanel.jsx';
+
+/**
+ * Orange Flag — mid-week early-warning list.
+ *
+ * Active clients who trained in the last four completed weeks but have zero
+ * visits from Monday through Wednesday of the CURRENT week. Meant to be checked
+ * on a Wednesday. Window is fixed (Mon–Wed of this week) — no date toggle.
+ */
 
 function TrendBadge({ trend }) {
   if (!trend) return null;
@@ -28,16 +36,15 @@ function TrendBadge({ trend }) {
   );
 }
 
-export default function RedsList({ data, loading, error, contactLog, onboardingIds = new Set() }) {
+export default function OrangeFlagList({ data, loading, error, contactLog, onboardingIds = new Set() }) {
   const [search, setSearch]         = useState('');
   const [selected, setSelected]     = useState(null);
   const [expandedId, setExpandedId] = useState(null);
 
-  // Window is fixed server-side: always the most recently completed Mon–Sun week.
-  const redsWindow = data?.redsWindow;
+  const flagWindow = data?.orangeFlagWindow;
 
   // Exclude clients currently in the onboarding pipeline — they're tracked separately
-  const clients = (data?.reds || []).filter((c) => !onboardingIds.has(c.id));
+  const clients = (data?.orangeFlag || []).filter((c) => !onboardingIds.has(c.id));
 
   const isContacted   = contactLog?.isContacted  ?? (() => false);
   const logContact    = contactLog?.logContact    ?? null;
@@ -61,18 +68,18 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
       {/* Header */}
       <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-800">
         <div className="flex items-center gap-2">
-          <TrendingDown className="h-4 w-4 text-red-400" />
-          <h2 className="font-semibold text-white">Red's List</h2>
+          <Flag className="h-4 w-4 text-orange-400" />
+          <h2 className="font-semibold text-white">Orange Flag</h2>
           {!loading && (
-            <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400 border border-red-500/20">
+            <span className="rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-400 border border-orange-500/20">
               {clients.length}
             </span>
           )}
         </div>
         <p className="text-xs text-gray-500">
-          {redsWindow
-            ? `${format(parseISO(redsWindow.start), 'd MMM')} – ${format(parseISO(redsWindow.end), 'd MMM')}`
-            : 'Last completed Mon–Sun week'}
+          {flagWindow
+            ? `No visits ${format(parseISO(flagWindow.start), 'd MMM')} – ${format(parseISO(flagWindow.end), 'd MMM')}`
+            : 'No visits Mon–Wed this week'}
         </p>
       </div>
 
@@ -85,7 +92,7 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name, email or phone…"
-            className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-8 pr-3 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:border-red-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-8 pr-3 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:border-orange-500 focus:outline-none"
           />
         </div>
       </div>
@@ -108,7 +115,7 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
           <div className="py-12 text-center">
             <CheckCircle className="h-8 w-8 text-orange-500/40 mx-auto mb-2" />
             <p className="text-sm text-gray-500">
-              {search ? 'No matches found' : "Red's list is clear"}
+              {search ? 'No matches found' : 'No orange flags this week'}
             </p>
           </div>
         )}
@@ -162,7 +169,7 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
                     className={`rounded-lg border px-3 py-1 text-xs font-medium transition-colors ${
                       wasContacted
                         ? 'border-gray-700 bg-gray-800 text-gray-500 hover:bg-gray-700 hover:text-gray-300'
-                        : 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                        : 'border-orange-500/30 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20'
                     }`}
                   >
                     {wasContacted ? 'View log' : 'Contact'}
@@ -172,7 +179,7 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
               </div>
 
               {/* Expandable attendance panel */}
-              {isExpanded && <WeeklyAttendancePanel client={client} status="red" />}
+              {isExpanded && <WeeklyAttendancePanel client={client} status="moderate" />}
             </div>
           );
         })}

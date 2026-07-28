@@ -104,7 +104,7 @@ export default function FringeClientsTable({ contactLog, onboardingIds = new Set
               onClick={() => setPeriod(p.key)}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                 period === p.key
-                  ? 'bg-emerald-600 text-white'
+                  ? 'bg-orange-600 text-white'
                   : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
               }`}
             >
@@ -205,7 +205,7 @@ export default function FringeClientsTable({ contactLog, onboardingIds = new Set
                     )}
                     <TrendIndicator trend={client.trend} />
                     {wasContacted && (
-                      <span className="shrink-0 flex items-center gap-1 text-xs text-emerald-500">
+                      <span className="shrink-0 flex items-center gap-1 text-xs text-orange-500">
                         <CheckCircle className="h-3 w-3" />
                         {lastLog ? formatDistanceToNow(new Date(lastLog.at), { addSuffix: true }) : 'Contacted'}
                       </span>

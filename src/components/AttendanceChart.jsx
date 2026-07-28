@@ -18,7 +18,7 @@ const CustomTooltip = ({ active, payload, label }) => {
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 shadow-xl">
       <p className="text-xs text-gray-400 mb-1">{label}</p>
-      <p className="text-sm font-semibold text-emerald-400">{payload[0].value} visits</p>
+      <p className="text-sm font-semibold text-orange-400">{payload[0].value} visits</p>
     </div>
   );
 };
@@ -70,7 +70,7 @@ export default function AttendanceChart() {
               onClick={() => setPeriod(f.key)}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                 period === f.key
-                  ? 'bg-emerald-600 text-white'
+                  ? 'bg-orange-600 text-white'
                   : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
               }`}
             >
@@ -116,8 +116,8 @@ export default function AttendanceChart() {
             <AreaChart data={daily} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
               <defs>
                 <linearGradient id="visitGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor="#10B981" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
+                  <stop offset="5%"  stopColor="#F7941D" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#F7941D" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="#1F2937" strokeDasharray="3 3" vertical={false} />
@@ -137,11 +137,11 @@ export default function AttendanceChart() {
               <Area
                 type="monotone"
                 dataKey="visits"
-                stroke="#10B981"
+                stroke="#F7941D"
                 strokeWidth={2}
                 fill="url(#visitGrad)"
                 dot={daily.length <= 14}
-                activeDot={{ r: 4, fill: '#10B981', stroke: '#065F46' }}
+                activeDot={{ r: 4, fill: '#F7941D', stroke: '#7C3A0A' }}
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -159,7 +159,7 @@ export default function AttendanceChart() {
                     tickLine={false}
                   />
                   <Tooltip content={<CustomTooltip />} cursor={{ fill: '#1F2937' }} />
-                  <Bar dataKey="visits" fill="#059669" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="visits" fill="#EA580C" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

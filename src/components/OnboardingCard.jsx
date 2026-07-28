@@ -4,15 +4,13 @@ import { AlertTriangle, BookOpen, MessageSquare, CheckCircle, X, RotateCcw } fro
 import { TASKS_BY_WEEK } from '../utils/onboardingTasks.js';
 import ContactModal from './ContactModal.jsx';
 
-// Short-program products that get removed from pipeline on no-rollover
-const SHORT_PRODUCTS = new Set(['3-Session', '14-Day']);
+// Short-program products that get removed from pipeline on no-rollover.
+// (Both current onboarding products run the full 28 days, so this is empty.)
+const SHORT_PRODUCTS = new Set();
 
 const PRODUCT_COLORS = {
-  'Strong Dad': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-  'Strong Mum': 'bg-pink-500/15 text-pink-400 border-pink-500/30',
-  '4-Week':     'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-  '14-Day':     'bg-violet-500/15 text-violet-400 border-violet-500/30',
-  '3-Session':  'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  '28-Day':     'bg-orange-500/15 text-orange-400 border-orange-500/30',
+  'Split Fee':  'bg-blue-500/15 text-blue-400 border-blue-500/30',
 };
 
 function productColor(short = '') {
@@ -20,7 +18,7 @@ function productColor(short = '') {
 }
 
 function SessionPips({ weekSessions, currentWeek }) {
-  const WEEK_COLORS = ['text-blue-400', 'text-amber-400', 'text-violet-400', 'text-emerald-400'];
+  const WEEK_COLORS = ['text-blue-400', 'text-amber-400', 'text-violet-400', 'text-orange-400'];
   return (
     <div className="flex items-center gap-2.5 flex-wrap">
       {weekSessions.map((count, i) => {
@@ -65,11 +63,11 @@ export default function OnboardingCard({
 
   // Card border/bg based on priority: rollover > at-risk > all tasks done
   const cardClass = isRollover
-    ? 'border-emerald-500/40 bg-emerald-950/10'
+    ? 'border-orange-500/40 bg-orange-950/10'
     : client.isAtRisk
       ? 'border-red-500/30 bg-red-950/10'
       : allDone
-        ? 'border-emerald-500/20 bg-emerald-950/5'
+        ? 'border-orange-500/20 bg-orange-950/5'
         : 'border-gray-800';
 
   return (
@@ -87,7 +85,7 @@ export default function OnboardingCard({
               </span>
             )}
             {isRollover && (
-              <span className="shrink-0 flex items-center gap-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400">
+              <span className="shrink-0 flex items-center gap-0.5 rounded-full border border-orange-500/30 bg-orange-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-orange-400">
                 <CheckCircle className="h-2.5 w-2.5" />
                 Rolling over
               </span>
@@ -114,7 +112,7 @@ export default function OnboardingCard({
           title="Notes & contact log"
           className={`shrink-0 rounded-lg border p-1.5 transition-colors ${
             wasContacted
-              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+              ? 'border-orange-500/30 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20'
               : 'border-gray-700 bg-gray-800/60 text-gray-600 hover:text-gray-300 hover:bg-gray-700'
           }`}
         >
@@ -155,7 +153,7 @@ export default function OnboardingCard({
                   onClick={() => toggleTask(client.id, task.id)}
                   className={`h-4 w-4 shrink-0 rounded border flex items-center justify-center transition-colors ${
                     done
-                      ? 'border-emerald-500 bg-emerald-500 text-white'
+                      ? 'border-orange-500 bg-orange-500 text-white'
                       : 'border-gray-700 bg-gray-800 hover:border-gray-500'
                   }`}
                 >
@@ -199,7 +197,7 @@ export default function OnboardingCard({
           <div className="flex gap-1.5">
             <button
               onClick={() => setDecision(client.id, 'rollover')}
-              className="flex-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 py-1.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+              className="flex-1 rounded-lg border border-orange-500/30 bg-orange-500/10 py-1.5 text-[11px] font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
             >
               ✓ Rolling over
             </button>
@@ -213,7 +211,7 @@ export default function OnboardingCard({
         ) : (
           /* Decision made — show status + undo */
           <div className="flex items-center justify-between">
-            <span className={`flex items-center gap-1.5 text-xs font-medium ${isRollover ? 'text-emerald-400' : 'text-gray-500'}`}>
+            <span className={`flex items-center gap-1.5 text-xs font-medium ${isRollover ? 'text-orange-400' : 'text-gray-500'}`}>
               {isRollover ? (
                 <><CheckCircle className="h-3.5 w-3.5" /> Rolling over to membership</>
               ) : (

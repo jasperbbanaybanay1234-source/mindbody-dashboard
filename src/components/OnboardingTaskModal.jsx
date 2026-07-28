@@ -27,7 +27,7 @@ export default function OnboardingTaskModal({ task, onClose }) {
         {/* Header */}
         <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4 border-b border-gray-800">
           <div>
-            <p className="text-xs font-medium text-emerald-400 mb-1">Week {task.week} · Task reference</p>
+            <p className="text-xs font-medium text-orange-400 mb-1">Week {task.week} · Task reference</p>
             <h2 className="text-base font-semibold text-white">{task.label}</h2>
           </div>
           <button
@@ -56,8 +56,8 @@ export default function OnboardingTaskModal({ task, onClose }) {
               >
                 {copied ? (
                   <>
-                    <CheckCircle className="h-3 w-3 text-emerald-400" />
-                    <span className="text-emerald-400">Copied!</span>
+                    <CheckCircle className="h-3 w-3 text-orange-400" />
+                    <span className="text-orange-400">Copied!</span>
                   </>
                 ) : (
                   <>

@@ -18,12 +18,6 @@
 [functions."mb-snapshot"]
   timeout = 26
 
-[functions."mb-client-analytics"]
-  timeout = 26
-
-[functions."mb-attendance"]
-  timeout = 26
-
 [functions."scheduled-daily-refresh"]
   timeout = 26
 

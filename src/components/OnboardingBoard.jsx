@@ -6,7 +6,7 @@ const WEEK_META = [
   { week: 1, label: 'Week 1', sub: 'Days 1–7',   color: 'text-blue-400',   border: 'border-blue-500/20',   bg: 'bg-blue-500/5'    },
   { week: 2, label: 'Week 2', sub: 'Days 8–14',  color: 'text-amber-400',  border: 'border-amber-500/20',  bg: 'bg-amber-500/5'   },
   { week: 3, label: 'Week 3', sub: 'Days 15–21', color: 'text-violet-400', border: 'border-violet-500/20', bg: 'bg-violet-500/5'  },
-  { week: 4, label: 'Week 4', sub: 'Days 22–28', color: 'text-emerald-400',border: 'border-emerald-500/20',bg: 'bg-emerald-500/5' },
+  { week: 4, label: 'Week 4', sub: 'Days 22–28', color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5' },
 ];
 
 export default function OnboardingBoard({

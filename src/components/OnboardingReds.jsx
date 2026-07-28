@@ -60,7 +60,7 @@ export default function OnboardingReds({ clients = [], contactLog }) {
                     {client.shortProduct || client.product}
                   </span>
                   {wasContacted && (
-                    <span className="shrink-0 flex items-center gap-1 text-xs text-emerald-500">
+                    <span className="shrink-0 flex items-center gap-1 text-xs text-orange-500">
                       <CheckCircle className="h-3 w-3" />
                       {lastLog ? formatDistanceToNow(new Date(lastLog.at), { addSuffix: true }) : 'Contacted'}
                     </span>
