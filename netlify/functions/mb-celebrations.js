@@ -8,52 +8,27 @@
  *   milestones        – active members within 10 sessions of a lifetime
  *                       session-count milestone (50, 100, … 1000)
  */
+import { getStore } from '@netlify/blobs';
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
 
 const WINDOW_DAYS = 30;
 
-// ─── Session milestones ─────────────────────────────────────────────────────
-// 50, 100, 150 … 1000
-const MILESTONES = Array.from({ length: 20 }, (_, i) => (i + 1) * 50);
-
-// "Approaching" = current total is within this many sessions below the milestone
-const MILESTONE_BUFFER = 10;
-
-// Parallelism for the per-client lifetime visit-count lookups
-const BATCH = 15;
-
-// Safety cap so an unusually large member base can't blow the function timeout
-const MILESTONE_MAX_CLIENTS = 800;
-
-// Earliest date we look back to when counting lifetime visits
-const LIFETIME_START = '2000-01-01';
-
-function nextMilestone(total) {
-  for (const m of MILESTONES) if (total <= m) return m;
-  return null;   // past 1000 — nothing left to chase
-}
-
-/**
- * Lifetime visit count for one client.
- *
- * Mindbody Public API v6 has no "total visits" field on /client/clients, so we
- * ask /client/clientvisits for a single record over an all-time date range and
- * read PaginationResponse.TotalResults — one cheap call per client.
- */
-async function getLifetimeVisitCount(token, clientId, endDate) {
+// Milestones need one Mindbody call PER active client to get a lifetime visit
+// count, which is too slow to compute inside a normal, HTTP-triggered function
+// (30+ seconds on a few hundred members — reliably times out). So this data is
+// instead computed once a night by scheduled-daily-refresh.js and cached in the
+// same Netlify Blobs store the rest of the dashboard's snapshot uses. This
+// function just reads it back out. See scheduled-daily-refresh.js for the
+// actual computation.
+async function getCachedMilestones() {
   try {
-    const data = await mbGet('/client/clientvisits', token, {
-      clientId,
-      startDate: LIFETIME_START,
-      endDate,
-      limit:  1,
-      offset: 0,
-    });
-    const total = data?.PaginationResponse?.TotalResults;
-    if (typeof total === 'number') return total;
-    return (data?.Visits || []).length;
+    const store = getStore('dashboard-cache');
+    const raw   = await store.get('dashboard-snapshot');
+    if (!raw) return [];
+    const snapshot = JSON.parse(raw);
+    return snapshot.milestones || [];
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -171,45 +146,10 @@ export const handler = async (event) => {
     birthdaysInactive.sort((a, b) => a.daysUntil - b.daysUntil);
     anniversaries.sort((a, b)     => a.daysUntil - b.daysUntil);
 
-    // ── Session-count milestones (active clients only) ──────────────────────
-    const endDate    = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-    const candidates = activeClients.slice(0, MILESTONE_MAX_CLIENTS);
-    const milestones = [];
-
-    console.log(`[mb-celebrations] Counting lifetime visits for ${candidates.length} active clients…`);
-
-    for (let i = 0; i < candidates.length; i += BATCH) {
-      const batch   = candidates.slice(i, i + BATCH);
-      const results = await Promise.allSettled(
-        batch.map((c) => getLifetimeVisitCount(token, c.id, endDate))
-      );
-
-      batch.forEach((c, idx) => {
-        const total = results[idx].status === 'fulfilled' ? results[idx].value : null;
-        if (total === null || total === undefined) return;
-
-        const milestone = nextMilestone(total);
-        if (milestone === null) return;
-
-        const sessionsAway = milestone - total;
-        if (sessionsAway < 0 || sessionsAway > MILESTONE_BUFFER) return;
-
-        milestones.push({
-          id:           c.id,
-          name:         c.name,
-          email:        c.email,
-          phone:        c.phone,
-          totalSessions: total,
-          milestone,
-          sessionsAway,
-        });
-      });
-    }
-
-    // Closest to their milestone first
-    milestones.sort((a, b) => a.sessionsAway - b.sessionsAway || a.name.localeCompare(b.name));
-
-    console.log(`[mb-celebrations] ${milestones.length} clients approaching a milestone`);
+    // ── Session-count milestones ─────────────────────────────────────────────
+    // Read from last night's cached snapshot instead of computed live — see
+    // getCachedMilestones() above for why.
+    const milestones = await getCachedMilestones();
 
     return ok({ birthdaysActive, birthdaysInactive, anniversaries, milestones });
   } catch (e) {
