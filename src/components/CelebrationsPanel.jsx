@@ -76,7 +76,7 @@ export default function CelebrationsPanel({ data, loading, error }) {
           <h2 className="font-semibold text-white">Upcoming Celebrations</h2>
         </div>
         <p className="text-xs text-gray-500">
-          {tab === 'milestones' ? 'Within 10 sessions of a milestone' : 'Next 30 days'}
+          {tab === 'milestones' ? 'Within 1 session of a milestone' : 'Next 30 days'}
         </p>
       </div>
 
@@ -148,7 +148,7 @@ export default function CelebrationsPanel({ data, loading, error }) {
 
         {!loading && !error && tab === 'milestones' && (
           milestones.length === 0
-            ? <EmptyState message="No members within 10 sessions of a milestone" />
+            ? <EmptyState message="No members within 1 session of a milestone" />
             : <>
                 <p className="px-5 py-2.5 text-xs text-orange-400/70 bg-orange-500/5 border-b border-gray-800/50">
                   Lifetime session counts — 50, 100, 150 … 1000
