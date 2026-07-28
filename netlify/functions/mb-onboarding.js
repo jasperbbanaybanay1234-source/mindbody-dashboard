@@ -16,7 +16,7 @@
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
 import { subDays, addDays, format, parseISO, differenceInDays } from 'date-fns';
 
-const BATCH = 15;
+const BATCH = 40; // raised from 15 - classvisits calls are the real bottleneck on real data volume
 
 // Length of the onboarding program in days
 const PROGRAM_DAYS = 28;
