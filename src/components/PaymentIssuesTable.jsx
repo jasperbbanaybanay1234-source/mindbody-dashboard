@@ -58,7 +58,7 @@ export default function PaymentIssuesTable({ data, loading, error }) {
             onClick={() => setTab(key)}
             className={`flex items-center gap-2 px-5 py-3 text-sm border-b-2 transition-colors ${
               tab === key
-                ? 'border-emerald-500 text-emerald-400 bg-gray-800/40'
+                ? 'border-orange-500 text-orange-400 bg-gray-800/40'
                 : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/20'
             }`}
           >
@@ -99,7 +99,7 @@ export default function PaymentIssuesTable({ data, loading, error }) {
               </div>
             ) : activeFailures.length === 0 ? (
               <div className="py-8 text-center">
-                <CheckCircle className="h-7 w-7 text-emerald-500/40 mx-auto mb-2" />
+                <CheckCircle className="h-7 w-7 text-orange-500/40 mx-auto mb-2" />
                 <p className="text-sm text-gray-500">All failures resolved</p>
               </div>
             ) : (
@@ -153,7 +153,7 @@ export default function PaymentIssuesTable({ data, loading, error }) {
                           </button>
                           <button
                             onClick={() => mark(p.key, 'reconciled', { clientName: p.clientName, amount: p.amount, card: p.card, date: p.date })}
-                            className="flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                            className="flex items-center gap-1 rounded-md border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-xs font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
                           >
                             <CheckCircle className="h-3 w-3" />
                             Reconciled
@@ -201,7 +201,7 @@ export default function PaymentIssuesTable({ data, loading, error }) {
                               <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                                 res?.status === 'reprocessed'
                                   ? 'bg-blue-500/10 text-blue-400'
-                                  : 'bg-emerald-500/10 text-emerald-400'
+                                  : 'bg-orange-500/10 text-orange-400'
                               }`}>
                                 {res?.status === 'reprocessed' ? 'Reprocessed' : 'Reconciled'}
                               </span>

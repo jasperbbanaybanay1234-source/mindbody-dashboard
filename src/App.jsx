@@ -4,10 +4,10 @@ import { useContactLog } from './utils/useContactLog.js';
 
 // Initial load reads from the Netlify Blobs cache via GET /api/mb-snapshot.
 // The Refresh button POSTs to /api/mb-snapshot to force a live pull + cache update.
-// onboarding and pt are always fetched live (too dynamic to cache daily).
+// onboarding is always fetched live (too dynamic to cache daily).
 // If the snapshot is unavailable, each key falls back to its live endpoint.
 
-const LOADING_ALL = { attendance: true, clientAnalytics: true, payments: true, revenue: true, onboarding: true, pt: true, celebrations: true };
+const LOADING_ALL = { attendance: true, clientAnalytics: true, payments: true, revenue: true, onboarding: true, celebrations: true };
 
 const CACHED_ENDPOINTS = {
   attendance:      '/api/mb-attendance',
@@ -23,7 +23,7 @@ async function safeFetch(url, options) {
 }
 
 export default function App() {
-  const [data, setData]               = useState({ attendance: null, clientAnalytics: null, payments: null, revenue: null, onboarding: null, pt: null, celebrations: null });
+  const [data, setData]               = useState({ attendance: null, clientAnalytics: null, payments: null, revenue: null, onboarding: null, celebrations: null });
   const [loading, setLoading]         = useState(LOADING_ALL);
   const [errors, setErrors]           = useState({});
   const [lastRefresh, setLastRefresh] = useState(null);
@@ -64,7 +64,6 @@ export default function App() {
     Promise.all([
       cachedLoad,
       liveFetch('onboarding',    '/api/mb-onboarding'),
-      liveFetch('pt',            '/api/mb-pt-analytics'),
       liveFetch('celebrations',  '/api/mb-celebrations'),
     ]).then(() => setLastRefresh(new Date()));
   }, []);

@@ -5,21 +5,31 @@
  * into week columns (1–4), and counts sessions via the class-visit approach
  * (proven to work — same pattern as mb-client-analytics.js).
  *
- * Triggered by purchases of any of these products:
- *   "3 Session Pass" | "14 Day Pass" | "4 Week Kickstarter"
- *   "Strong Dad Transformation" | "Strong Mum Transformation"
+ * Triggered by purchases of either of these products:
+ *   "28 Day Kickstarter" | "Split the Fee"
+ *
+ * Also returns two automatic post-program classifications for clients whose
+ * onboarding product has already expired (start date + 28 days is in the past):
+ *   autoRolledOver     – holds a real membership/contract starting on or after expiry
+ *   autoNotRolledOver  – no such membership found
  */
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
-import { subDays, format, parseISO, differenceInDays } from 'date-fns';
+import { subDays, addDays, format, parseISO, differenceInDays } from 'date-fns';
 
 const BATCH = 15;
 
+// Length of the onboarding program in days
+const PROGRAM_DAYS = 28;
+
+// How far back to look for expired onboarding purchases (rollover section)
+const ROLLOVER_LOOKBACK_DAYS = 90;
+
+// Cap on how many expired clients we run contract lookups for (1 API call each)
+const ROLLOVER_MAX_CLIENTS = 120;
+
 const ONBOARDING_KEYWORDS = [
-  '3 session pass',
-  '14 day pass',
-  '4 week kickstarter',
-  'strong dad transformation',
-  'strong mum transformation',
+  '28 day kickstarter',
+  'split the fee',
 ];
 
 function isOnboardingProduct(name = '') {
@@ -29,11 +39,8 @@ function isOnboardingProduct(name = '') {
 
 function shortProduct(name = '') {
   const lower = name.toLowerCase();
-  if (lower.includes('strong dad'))                            return 'Strong Dad';
-  if (lower.includes('strong mum'))                            return 'Strong Mum';
-  if (lower.includes('4 week') || lower.includes('kickstarter')) return '4-Week';
-  if (lower.includes('14 day'))                                return '14-Day';
-  if (lower.includes('3 session'))                             return '3-Session';
+  if (lower.includes('28 day') || lower.includes('kickstarter')) return '28-Day';
+  if (lower.includes('split the fee'))                          return 'Split Fee';
   return name.split(' ').slice(0, 2).join(' ');
 }
 
@@ -106,6 +113,57 @@ async function getAllClients(token) {
   return map;
 }
 
+// Same endpoint/pattern as getContractResumeDate in mb-client-analytics.js
+async function getClientContracts(token, clientId) {
+  try {
+    const data = await mbGet('/client/clientcontracts', token, { clientId, Limit: 50 });
+    return data.ClientContracts || data.Contracts || [];
+  } catch {
+    return [];
+  }
+}
+
+function contractName(c = {}) {
+  return (
+    c.ContractName || c.contractName ||
+    c.Name         || c.name         ||
+    c.ContractDescription || c.contractDescription ||
+    c.Description  || c.description  ||
+    ''
+  );
+}
+
+function contractStart(c = {}) {
+  const raw =
+    c.StartDate     || c.startDate     ||
+    c.AgreementDate || c.agreementDate ||
+    c.ActiveDate    || c.activeDate    ||
+    c.OriginationDate || c.originationDate ||
+    null;
+  if (!raw) return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * A rollover = a real ongoing membership/contract whose start date is on or
+ * after the client's onboarding product expiry date, and which isn't the
+ * 28-Day Kickstarter / Split the Fee product itself.
+ */
+function findRolloverContract(contracts, endDate) {
+  const endKey = format(endDate, 'yyyy-MM-dd');
+  let best = null;
+  for (const c of contracts) {
+    const name = contractName(c);
+    if (isOnboardingProduct(name)) continue;      // same onboarding product — doesn't count
+    const start = contractStart(c);
+    if (!start) continue;
+    if (format(start, 'yyyy-MM-dd') < endKey) continue;
+    if (!best || start < best.start) best = { start, name: name || 'Membership' };
+  }
+  return best;
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export const handler = async (event) => {
@@ -115,16 +173,21 @@ export const handler = async (event) => {
     const token = await getStaffToken();
     const now   = new Date();
 
-    const windowStart = subDays(now, 29);
-    const fetchStart  = format(windowStart, "yyyy-MM-dd'T'00:00:00");
-    const fetchEnd    = format(now,         "yyyy-MM-dd'T'23:59:59");
+    // Classes only need the active-onboarding window (last 28 days).
+    const windowStart = subDays(now, PROGRAM_DAYS - 1);
+    const classStart  = format(windowStart, "yyyy-MM-dd'T'00:00:00");
+    const classEnd    = format(now,         "yyyy-MM-dd'T'23:59:59");
+
+    // Sales look back further so we can also classify already-expired programs.
+    const salesStart = format(subDays(now, ROLLOVER_LOOKBACK_DAYS), "yyyy-MM-dd'T'00:00:00");
+    const salesEnd   = classEnd;
 
     // Fetch sales, clients, and classes in parallel to minimise wall-clock time
     console.log('[mb-onboarding] Starting parallel fetch…');
     const [allSales, clientMap, allClasses] = await Promise.all([
-      getSales(token, fetchStart, fetchEnd),
+      getSales(token, salesStart, salesEnd),
       getAllClients(token),
-      getClasses(token, fetchStart, fetchEnd),
+      getClasses(token, classStart, classEnd),
     ]);
     console.log(`[mb-onboarding] Got ${allSales.length} sales, ${Object.keys(clientMap).length} clients, ${allClasses.length} classes`);
 
@@ -153,22 +216,86 @@ export const handler = async (event) => {
       }
     }
 
-    // Filter to clients currently in the 0–27 day window
-    const activeOnboarding = Object.entries(onboardingMap)
-      .map(([clientId, info]) => {
-        const daysSinceStart = differenceInDays(now, info.startDate);
-        const week = Math.min(4, Math.floor(daysSinceStart / 7) + 1);
-        return { clientId, ...info, daysSinceStart, week };
-      })
-      .filter((c) => c.daysSinceStart >= 0 && c.daysSinceStart <= 27);
+    const allOnboarding = Object.entries(onboardingMap).map(([clientId, info]) => {
+      const daysSinceStart = differenceInDays(now, info.startDate);
+      const week    = Math.min(4, Math.floor(daysSinceStart / 7) + 1);
+      const endDate = addDays(info.startDate, PROGRAM_DAYS);
+      return { clientId, ...info, daysSinceStart, week, endDate };
+    });
 
-    console.log(`[mb-onboarding] ${activeOnboarding.length} active onboarding clients`);
+    // Currently mid-program (day 0–27)
+    const activeOnboarding = allOnboarding.filter(
+      (c) => c.daysSinceStart >= 0 && c.daysSinceStart <= PROGRAM_DAYS - 1
+    );
+
+    // Program already finished — eligible for automatic rollover classification
+    const expiredOnboarding = allOnboarding
+      .filter((c) => c.daysSinceStart >= PROGRAM_DAYS)
+      .sort((a, b) => b.endDate - a.endDate)     // most recently expired first
+      .slice(0, ROLLOVER_MAX_CLIENTS);
+
+    console.log(
+      `[mb-onboarding] ${activeOnboarding.length} active, ${expiredOnboarding.length} expired onboarding clients`
+    );
+
+    // ── Automatic rollover classification (expired programs only) ─────────
+    const autoRolledOver    = [];
+    const autoNotRolledOver = [];
+
+    for (let i = 0; i < expiredOnboarding.length; i += BATCH) {
+      const batch   = expiredOnboarding.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        batch.map((c) => getClientContracts(token, c.clientId))
+      );
+
+      batch.forEach((c, idx) => {
+        const contracts = results[idx].status === 'fulfilled' ? results[idx].value : [];
+        const rollover  = findRolloverContract(contracts, c.endDate);
+        const client    = clientMap[c.clientId] || { id: c.clientId, name: `Client ${c.clientId}`, email: '', phone: '' };
+
+        const entry = {
+          id:           c.clientId,
+          name:         client.name,
+          email:        client.email,
+          phone:        client.phone,
+          product:      c.product,
+          shortProduct: c.shortProduct,
+          startDate:    format(c.startDate, 'yyyy-MM-dd'),
+          endDate:      format(c.endDate,   'yyyy-MM-dd'),
+        };
+
+        if (rollover) {
+          autoRolledOver.push({
+            ...entry,
+            membership:          rollover.name,
+            membershipStartDate: format(rollover.start, 'yyyy-MM-dd'),
+          });
+        } else {
+          autoNotRolledOver.push(entry);
+        }
+      });
+    }
+
+    // Most recently expired first
+    autoRolledOver.sort((a, b)    => b.endDate.localeCompare(a.endDate));
+    autoNotRolledOver.sort((a, b) => b.endDate.localeCompare(a.endDate));
+
+    const rolloverPayload = {
+      autoRolledOver,
+      autoNotRolledOver,
+      rolloverSummary: {
+        rolledOver:    autoRolledOver.length,
+        notRolledOver: autoNotRolledOver.length,
+        expired:       expiredOnboarding.length,
+      },
+    };
 
     if (activeOnboarding.length === 0) {
       return ok({
         week1: [], week2: [], week3: [], week4: [],
         pipelineReds: [],
         onboardingIds: [],
+        ...rolloverPayload,
         summary: { total: 0, atRisk: 0, week1Count: 0, week2Count: 0, week3Count: 0, week4Count: 0 },
       });
     }
@@ -228,6 +355,7 @@ export const handler = async (event) => {
         product:            c.product,
         shortProduct:       c.shortProduct,
         startDate:          format(c.startDate, 'yyyy-MM-dd'),
+        endDate:            format(c.endDate,   'yyyy-MM-dd'),
         daysSinceStart:     c.daysSinceStart,
         week:               c.week,
         weekSessions,
@@ -249,7 +377,10 @@ export const handler = async (event) => {
         return b.lastSessionDate.localeCompare(a.lastSessionDate);
       });
 
-    console.log(`[mb-onboarding] Done. ${enriched.length} clients, ${pipelineReds.length} at risk`);
+    console.log(
+      `[mb-onboarding] Done. ${enriched.length} clients, ${pipelineReds.length} at risk, ` +
+      `${autoRolledOver.length} rolled over, ${autoNotRolledOver.length} not rolled over`
+    );
 
     return ok({
       week1:         byWeek(1),
@@ -258,6 +389,7 @@ export const handler = async (event) => {
       week4:         byWeek(4),
       pipelineReds,
       onboardingIds: enriched.map((c) => c.id),
+      ...rolloverPayload,
       summary: {
         total:      enriched.length,
         atRisk:     pipelineReds.length,

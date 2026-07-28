@@ -85,7 +85,7 @@ export default function SuspensionsList({ data, loading, error }) {
 
         {!loading && !error && clients.length === 0 && (
           <div className="py-10 text-center">
-            <CheckCircle className="h-7 w-7 text-emerald-500/40 mx-auto mb-2" />
+            <CheckCircle className="h-7 w-7 text-orange-500/40 mx-auto mb-2" />
             <p className="text-sm text-gray-500">No suspended clients</p>
           </div>
         )}

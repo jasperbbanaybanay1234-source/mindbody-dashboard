@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Cake, Star, Users, CheckCircle } from 'lucide-react';
+import { Cake, Star, Users, CheckCircle, Trophy } from 'lucide-react';
 
 function DaysChip({ days }) {
-  if (days === 0) return <span className="rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-xs font-medium text-emerald-400">Today!</span>;
+  if (days === 0) return <span className="rounded-full bg-orange-500/20 border border-orange-500/30 px-2 py-0.5 text-xs font-medium text-orange-400">Today!</span>;
   if (days === 1) return <span className="rounded-full bg-yellow-500/10 border border-yellow-500/20 px-2 py-0.5 text-xs font-medium text-yellow-400">Tomorrow</span>;
   return <span className="rounded-full bg-gray-700/60 px-2 py-0.5 text-xs text-gray-400">{days}d</span>;
 }
@@ -15,6 +15,30 @@ function ClientRow({ c, sub }) {
         <p className="text-xs text-gray-500">{c.date} · {sub}</p>
       </div>
       <DaysChip days={c.daysUntil} />
+    </div>
+  );
+}
+
+function MilestoneRow({ c }) {
+  const reached = c.sessionsAway === 0;
+  return (
+    <div className="flex items-center justify-between px-5 py-2.5 border-b border-gray-800/50 last:border-0 hover:bg-gray-800/30 transition-colors">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-gray-200 truncate">{c.name}</p>
+        <p className="text-xs text-gray-500">
+          {c.totalSessions} sessions — approaching {c.milestone}
+          {(c.email || c.phone) && (
+            <span className="ml-2 text-gray-600">{c.email || c.phone}</span>
+          )}
+        </p>
+      </div>
+      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium tabular-nums ${
+        reached
+          ? 'bg-orange-500/20 border-orange-500/30 text-orange-400'
+          : 'bg-orange-500/10 border-orange-500/20 text-orange-400'
+      }`}>
+        {reached ? 'Reached!' : `${c.sessionsAway} to go`}
+      </span>
     </div>
   );
 }
@@ -34,11 +58,13 @@ export default function CelebrationsPanel({ data, loading, error }) {
   const birthdaysActive   = data?.birthdaysActive   || [];
   const birthdaysInactive = data?.birthdaysInactive || [];
   const anniversaries     = data?.anniversaries     || [];
+  const milestones        = data?.milestones        || [];
 
   const tabs = [
-    { key: 'active',       label: 'Birthdays',         icon: Cake,  count: birthdaysActive.length   },
-    { key: 'inactive',     label: 'Lapsed Birthdays',  icon: Users, count: birthdaysInactive.length },
-    { key: 'anniversaries',label: 'Anniversaries',     icon: Star,  count: anniversaries.length     },
+    { key: 'active',       label: 'Birthdays',         icon: Cake,   count: birthdaysActive.length   },
+    { key: 'inactive',     label: 'Lapsed Birthdays',  icon: Users,  count: birthdaysInactive.length },
+    { key: 'anniversaries',label: 'Anniversaries',     icon: Star,   count: anniversaries.length     },
+    { key: 'milestones',   label: 'Milestones',        icon: Trophy, count: milestones.length        },
   ];
 
   return (
@@ -49,18 +75,20 @@ export default function CelebrationsPanel({ data, loading, error }) {
           <Cake className="h-4 w-4 text-pink-400" />
           <h2 className="font-semibold text-white">Upcoming Celebrations</h2>
         </div>
-        <p className="text-xs text-gray-500">Next 30 days</p>
+        <p className="text-xs text-gray-500">
+          {tab === 'milestones' ? 'Within 10 sessions of a milestone' : 'Next 30 days'}
+        </p>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-800">
+      <div className="flex flex-wrap border-b border-gray-800">
         {tabs.map(({ key, label, icon: Icon, count }) => (
           <button
             key={key}
             onClick={() => setTab(key)}
             className={`flex items-center gap-2 px-5 py-3 text-sm border-b-2 transition-colors ${
               tab === key
-                ? 'border-emerald-500 text-emerald-400 bg-gray-800/40'
+                ? 'border-orange-500 text-orange-400 bg-gray-800/40'
                 : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-gray-800/20'
             }`}
           >
@@ -116,6 +144,17 @@ export default function CelebrationsPanel({ data, loading, error }) {
             : anniversaries.map(c => (
                 <ClientRow key={c.id} c={c} sub={`${c.years} ${c.years === 1 ? 'year' : 'years'}`} />
               ))
+        )}
+
+        {!loading && !error && tab === 'milestones' && (
+          milestones.length === 0
+            ? <EmptyState message="No members within 10 sessions of a milestone" />
+            : <>
+                <p className="px-5 py-2.5 text-xs text-orange-400/70 bg-orange-500/5 border-b border-gray-800/50">
+                  Lifetime session counts — 50, 100, 150 … 1000
+                </p>
+                {milestones.map(c => <MilestoneRow key={c.id} c={c} />)}
+              </>
         )}
       </div>
     </div>

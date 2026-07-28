@@ -1,11 +1,13 @@
 import { useMemo } from 'react';
 import { Users2 } from 'lucide-react';
-import OnboardingBoard from './OnboardingBoard.jsx';
-import OnboardingReds  from './OnboardingReds.jsx';
+import OnboardingBoard    from './OnboardingBoard.jsx';
+import OnboardingReds     from './OnboardingReds.jsx';
+import OnboardingRollover from './OnboardingRollover.jsx';
 import { useOnboardingTasks } from '../utils/useOnboardingTasks.js';
 
-// Short-program products get removed from the board if no-rollover is selected
-const SHORT_PRODUCTS = new Set(['3-Session', '14-Day']);
+// Short-program products get removed from the board if no-rollover is selected.
+// (Both current onboarding products run the full 28 days, so this is currently empty.)
+const SHORT_PRODUCTS = new Set();
 
 function StatPill({ label, value, color = 'text-gray-300' }) {
   return (
@@ -81,8 +83,10 @@ export default function OnboardingTab({
     );
   }
 
-  const summary      = displayData?.summary    || {};
-  const pipelineReds = displayData?.pipelineReds || [];
+  const summary       = displayData?.summary       || {};
+  const pipelineReds  = displayData?.pipelineReds  || [];
+  const rolledOver    = displayData?.autoRolledOver    || [];
+  const notRolledOver = displayData?.autoNotRolledOver || [];
 
   const isEmpty = !displayData || (
     (displayData.week1?.length || 0) +
@@ -100,7 +104,7 @@ export default function OnboardingTab({
         <StatPill label="Week 1"      value={summary.week1Count ?? 0} color="text-blue-400" />
         <StatPill label="Week 2"      value={summary.week2Count ?? 0} color="text-amber-400" />
         <StatPill label="Week 3"      value={summary.week3Count ?? 0} color="text-violet-400" />
-        <StatPill label="Week 4"      value={summary.week4Count ?? 0} color="text-emerald-400" />
+        <StatPill label="Week 4"      value={summary.week4Count ?? 0} color="text-orange-400" />
       </div>
 
       {/* Kanban board */}
@@ -109,8 +113,8 @@ export default function OnboardingTab({
           <Users2 className="h-10 w-10 text-gray-700 mx-auto mb-3" />
           <p className="text-sm text-gray-500 font-medium">No active onboarding clients</p>
           <p className="text-xs text-gray-600 mt-1">
-            Clients appear here when they purchase a 3-Session Pass, 14-Day Pass,<br />
-            4-Week Kickstarter, Strong Dad or Strong Mum Transformation.
+            Clients appear here when they purchase a 28 Day Kickstarter<br />
+            or a Split the Fee package.
           </p>
         </div>
       ) : (
@@ -128,6 +132,13 @@ export default function OnboardingTab({
       {pipelineReds.length > 0 && (
         <OnboardingReds clients={pipelineReds} contactLog={contactLog} />
       )}
+
+      {/* Automatic rollover outcomes — below Pipeline Reds */}
+      <OnboardingRollover
+        rolledOver={rolledOver}
+        notRolledOver={notRolledOver}
+        contactLog={contactLog}
+      />
     </div>
   );
 }

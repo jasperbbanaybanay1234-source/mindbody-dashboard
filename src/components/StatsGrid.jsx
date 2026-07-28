@@ -40,7 +40,7 @@ export default function StatsGrid({ attendance, clientAnalytics, loading }) {
         label="Visits this week"
         value={fmt(visitTotal)}
         sub={avgDaily !== undefined ? `avg ${fmt(avgDaily)}/day` : undefined}
-        color="bg-emerald-500/10 text-emerald-400"
+        color="bg-orange-500/10 text-orange-400"
         loading={loading.attendance}
       />
       <Card
@@ -48,7 +48,7 @@ export default function StatsGrid({ attendance, clientAnalytics, loading }) {
         label="Red's List"
         value={fmt(redsCount)}
         sub="active recently · missed this week"
-        color={redsCount > 0 ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}
+        color={redsCount > 0 ? 'bg-red-500/10 text-red-400' : 'bg-orange-500/10 text-orange-400'}
         loading={loading.clientAnalytics}
       />
       <Card

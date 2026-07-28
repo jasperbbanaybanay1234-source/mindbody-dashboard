@@ -33,7 +33,7 @@ function Card({ label, value, sub, change, loading }) {
     <div className="rounded-xl border border-gray-800 bg-gray-900 p-5">
       <div className="flex items-start justify-between mb-3">
         <p className="text-sm text-gray-400">{label}</p>
-        <span className="rounded-lg p-2 bg-emerald-500/10 text-emerald-400">
+        <span className="rounded-lg p-2 bg-orange-500/10 text-orange-400">
           <DollarSign className="h-4 w-4" />
         </span>
       </div>

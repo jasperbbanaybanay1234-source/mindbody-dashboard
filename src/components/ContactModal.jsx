@@ -7,7 +7,7 @@ function LogEntry({ entry }) {
   return (
     <div className="flex gap-3 text-xs">
       <div className="shrink-0 mt-0.5">
-        <div className="h-2 w-2 rounded-full bg-emerald-500/60 ring-2 ring-gray-900 mt-1" />
+        <div className="h-2 w-2 rounded-full bg-orange-500/60 ring-2 ring-gray-900 mt-1" />
       </div>
       <div className="min-w-0">
         <p className="text-gray-400">
@@ -67,7 +67,7 @@ export default function ContactModal({ client, onClose, onContacted, logContact,
           {client.email && (
             <a
               href={`mailto:${client.email}?subject=We%20miss%20you!&body=Hi%20${encodeURIComponent(client.name?.split(' ')[0] || '')}%2C%0A%0AIt%27s%20been%20a%20while%20since%20we%27ve%20seen%20you.%20We%27d%20love%20to%20have%20you%20back!`}
-              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-2.5 text-sm font-medium text-white transition-colors"
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-orange-600 hover:bg-orange-500 px-3 py-2.5 text-sm font-medium text-white transition-colors"
             >
               <Mail className="h-4 w-4" />
               Email
@@ -142,7 +142,7 @@ export default function ContactModal({ client, onClose, onContacted, logContact,
           onChange={(e) => setNote(e.target.value)}
           rows={2}
           placeholder="e.g. Left voicemail, sending promo email…"
-          className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:border-emerald-500 focus:outline-none resize-none mb-4"
+          className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:border-orange-500 focus:outline-none resize-none mb-4"
         />
 
         <button
@@ -151,7 +151,7 @@ export default function ContactModal({ client, onClose, onContacted, logContact,
           className="w-full flex items-center justify-center gap-2 rounded-lg bg-gray-700 hover:bg-gray-600 disabled:opacity-60 px-4 py-2.5 text-sm font-medium text-white transition-colors"
         >
           {status === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
-          {status === 'done'    && <CheckCircle className="h-4 w-4 text-emerald-400" />}
+          {status === 'done'    && <CheckCircle className="h-4 w-4 text-orange-400" />}
           {status === 'loading' ? 'Saving…' : status === 'done' ? 'Logged!' : 'Mark as contacted'}
         </button>
 
