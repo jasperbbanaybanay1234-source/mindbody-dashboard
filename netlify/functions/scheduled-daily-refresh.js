@@ -93,6 +93,72 @@ async function fetchRevenue(token) {
   };
 }
 
+// ─── Session milestones (moved here from mb-celebrations.js) ───────────────
+// This needs one Mindbody call per active client, which is too slow to run
+// inside a normal HTTP-triggered function (see mb-celebrations.js note) — so
+// it's computed here, in the scheduled/background function, and cached.
+const MILESTONES          = Array.from({ length: 20 }, (_, i) => (i + 1) * 50);
+const MILESTONE_BUFFER    = 1; // tightened for easy live spot-checking (was 10)
+const MILESTONE_MAX_CLIENTS = 800;
+const LIFETIME_START      = '2000-01-01';
+const MILESTONE_BATCH     = 15;
+
+function nextMilestone(total) {
+  for (const m of MILESTONES) if (total <= m) return m;
+  return null;
+}
+
+async function getLifetimeVisitCount(token, clientId, endDate) {
+  try {
+    const data = await mbGet('/client/clientvisits', token, {
+      clientId, startDate: LIFETIME_START, endDate, limit: 1, offset: 0,
+    });
+    const total = data?.PaginationResponse?.TotalResults;
+    if (typeof total === 'number') return total;
+    return (data?.Visits || []).length;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMilestones(token) {
+  let allClients = [], offset = 0;
+  while (true) {
+    const data = await mbGet('/client/clients', token, { ActiveOnly: true, Limit: 200, Offset: offset });
+    const clients = data.Clients || [];
+    allClients = allClients.concat(clients);
+    if (clients.length < 200 || offset >= 1800) break;
+    offset += 200;
+  }
+
+  const candidates = allClients.slice(0, MILESTONE_MAX_CLIENTS).map((c) => ({
+    id:    String(c.Id),
+    name:  `${c.FirstName || ''} ${c.LastName || ''}`.trim(),
+    email: c.Email || '',
+    phone: c.MobilePhone || c.HomePhone || '',
+  }));
+
+  const endDate   = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const milestones = [];
+
+  for (let i = 0; i < candidates.length; i += MILESTONE_BATCH) {
+    const batch   = candidates.slice(i, i + MILESTONE_BATCH);
+    const results = await Promise.allSettled(batch.map((c) => getLifetimeVisitCount(token, c.id, endDate)));
+    batch.forEach((c, idx) => {
+      const total = results[idx].status === 'fulfilled' ? results[idx].value : null;
+      if (total === null || total === undefined) return;
+      const milestone = nextMilestone(total);
+      if (milestone === null) return;
+      const sessionsAway = milestone - total;
+      if (sessionsAway < 0 || sessionsAway > MILESTONE_BUFFER) return;
+      milestones.push({ id: c.id, name: c.name, email: c.email, phone: c.phone, totalSessions: total, milestone, sessionsAway });
+    });
+  }
+
+  milestones.sort((a, b) => a.sessionsAway - b.sessionsAway || a.name.localeCompare(b.name));
+  return milestones;
+}
+
 const BASE_URL = process.env.URL || 'http://localhost:8888';
 
 // ─── Handler ────────────────────────────────────────────────────────────────
@@ -101,29 +167,38 @@ export const handler = async () => {
   console.log('[scheduled-daily-refresh] Starting at', new Date().toISOString());
   try {
     const token = await getStaffToken();
+    const store = getStore('dashboard-cache');
+
+    // Read yesterday's snapshot first so a single failed fetch tonight
+    // doesn't wipe out otherwise-good cached data for that section.
+    const prevRaw = await store.get('dashboard-snapshot');
+    const prev    = prevRaw ? JSON.parse(prevRaw) : {};
 
     // Attendance + revenue: fetched inline (simpler logic, avoids HTTP chain)
     // clientAnalytics + payments: delegate to their own endpoints (complex N+1 logic)
-    const [att, rev, ana, pay] = await Promise.allSettled([
+    // milestones: computed inline too (see fetchMilestones above) — an HTTP
+    // delegate to mb-celebrations would hit the same per-client timeout risk.
+    const [att, rev, ana, pay, mil] = await Promise.allSettled([
       fetchAttendance(token),
       fetchRevenue(token),
       fetch(`${BASE_URL}/api/mb-client-analytics`).then(r => r.json()),
       fetch(`${BASE_URL}/api/mb-payments`).then(r => r.json()),
+      fetchMilestones(token),
     ]);
 
     const snapshot = {
-      attendance:      att.status === 'fulfilled' ? att.value : null,
-      revenue:         rev.status === 'fulfilled' ? rev.value : null,
-      clientAnalytics: ana.status === 'fulfilled' ? ana.value : null,
-      payments:        pay.status === 'fulfilled' ? pay.value : null,
+      attendance:      att.status === 'fulfilled' ? att.value : (prev.attendance ?? null),
+      revenue:         rev.status === 'fulfilled' ? rev.value : (prev.revenue ?? null),
+      clientAnalytics: ana.status === 'fulfilled' ? ana.value : (prev.clientAnalytics ?? null),
+      payments:        pay.status === 'fulfilled' ? pay.value : (prev.payments ?? null),
+      milestones:      mil.status === 'fulfilled' ? mil.value : (prev.milestones ?? []),
       cachedAt:        new Date().toISOString(),
     };
 
-    const store = getStore('dashboard-cache');
     await store.set('dashboard-snapshot', JSON.stringify(snapshot));
     console.log(
       '[scheduled-daily-refresh] Done.',
-      `att=${att.status} rev=${rev.status} ana=${ana.status} pay=${pay.status}`,
+      `att=${att.status} rev=${rev.status} ana=${ana.status} pay=${pay.status} mil=${mil.status}`,
     );
   } catch (e) {
     console.error('[scheduled-daily-refresh] Failed:', e.message);
