@@ -158,17 +158,29 @@ export const handler = async (event) => {
     const rb28 = subDays(rw1Start, 21);
 
     // ── Orange Flag window — Mon 00:00 → Wed 23:59 of the CURRENT week ─────
+    // Fetched as its own small, separate request (at most 3 days of classes)
+    // rather than folded into the main range below — keeps the main fetch the
+    // same size it always was, since the current in-progress week is not
+    // needed for reds/fringe/no-shows and would otherwise widen every request.
     const ofStart = startOfWeek(now, { weekStartsOn: 1 });
     const ofEnd   = endOfDay(addDays(ofStart, 2));
 
-    // Fetch wide enough to cover every window above
-    const fetchStart = [b28, rb28, ofStart].reduce((min, d) => (d < min ? d : min));
-    const fetchEnd   = [w1End, rw1End, ofEnd, now].reduce((max, d) => (d > max ? d : max));
+    // Fetch wide enough to cover reds + fringe/no-shows only (unchanged size)
+    const fetchStart = b28 < rb28 ? b28 : rb28;
+    const fetchEnd    = w1End > rw1End ? w1End : rw1End;
 
     const startStr = format(fetchStart, "yyyy-MM-dd'T'00:00:00");
     const endStr   = format(fetchEnd,   "yyyy-MM-dd'T'23:59:59");
 
     const allClasses = await getClasses(token, startStr, endStr);
+
+    // Small dedicated fetch for the Orange Flag Mon–Wed window only. Skipped
+    // entirely once Wed has passed for the week and it's earlier than fetchEnd
+    // isn't relevant here — it's always current-week, so always a fresh, tiny
+    // request (at most 3 days) regardless of what day it is.
+    const ofStartStr = format(ofStart, "yyyy-MM-dd'T'00:00:00");
+    const ofEndStr   = format(ofEnd,   "yyyy-MM-dd'T'23:59:59");
+    const ofClasses  = await getClasses(token, ofStartStr, ofEndStr);
 
     // Per-client data structures
     const weeks         = {};  // id → { w1, w2, w3, w4 }  (period-driven buckets)
@@ -198,16 +210,12 @@ export const handler = async (event) => {
         const inR3 = !inR1 && !inR2 && classDate > rb21 && classDate <= rw1End;
         const inR4 = !inR1 && !inR2 && !inR3 && classDate > rb28 && classDate <= rw1End;
 
-        // Mon–Wed of the current, in-progress week
-        const inMonWed = classDate >= ofStart && classDate <= ofEnd;
-
         for (const visit of results[idx].value) {
           const id = String(visit.ClientId || '');
           if (!id) continue;
 
           if (!weeks[id])    weeks[id]    = { w1: 0, w2: 0, w3: 0, w4: 0 };
           if (!redWeeks[id]) redWeeks[id] = { w1: 0, w2: 0, w3: 0, w4: 0 };
-          if (monWedCount[id] === undefined) monWedCount[id] = 0;
 
           if (visit.SignedIn === true && !visit.LateCancelled) {
             if (inW1) weeks[id].w1++;
@@ -219,8 +227,6 @@ export const handler = async (event) => {
             if (inR2) redWeeks[id].w2++;
             if (inR3) redWeeks[id].w3++;
             if (inR4) redWeeks[id].w4++;
-
-            if (inMonWed) monWedCount[id]++;
 
             // Track the most recent service name (W1 priority)
             if (inW1 && visit.ServiceName) services[id] = visit.ServiceName;
@@ -242,6 +248,24 @@ export const handler = async (event) => {
               staffName: `${cls.Staff?.FirstName || ''} ${cls.Staff?.LastName || ''}`.trim(),
             });
           }
+        }
+      });
+    }
+
+    // Small separate pass just for the Orange Flag Mon–Wed window (at most a
+    // handful of classes, so this stays fast even though it's a second loop).
+    for (let i = 0; i < ofClasses.length; i += BATCH) {
+      const batch   = ofClasses.slice(i, i + BATCH);
+      const results = await Promise.allSettled(batch.map((cls) => getVisits(token, cls.Id)));
+      batch.forEach((cls, idx) => {
+        if (results[idx].status !== 'fulfilled') return;
+        const classDate = parseISO(cls.StartDateTime);
+        if (classDate < ofStart || classDate > ofEnd) return;
+        for (const visit of results[idx].value) {
+          const id = String(visit.ClientId || '');
+          if (!id) continue;
+          if (monWedCount[id] === undefined) monWedCount[id] = 0;
+          if (visit.SignedIn === true && !visit.LateCancelled) monWedCount[id]++;
         }
       });
     }
