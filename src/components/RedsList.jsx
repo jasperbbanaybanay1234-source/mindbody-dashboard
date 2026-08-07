@@ -33,7 +33,9 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
   const [selected, setSelected]     = useState(null);
   const [expandedId, setExpandedId] = useState(null);
 
-  // Window is fixed server-side: always the most recently completed Mon–Sun week.
+  // Window is fixed and frozen server-side: the most recently completed
+  // Mon–Sun week, regenerated once a week (Monday 1am Sydney). Never
+  // recalculated on page load or Sync.
   const redsWindow = data?.redsWindow;
 
   // Exclude clients currently in the onboarding pipeline — they're tracked separately
@@ -62,18 +64,28 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
       <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-800">
         <div className="flex items-center gap-2">
           <TrendingDown className="h-4 w-4 text-red-400" />
-          <h2 className="font-semibold text-white">Red's List</h2>
+          <h2 className="font-semibold text-white">Red Flag List</h2>
           {!loading && (
             <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400 border border-red-500/20">
               {clients.length}
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-500">
-          {redsWindow
-            ? `${format(parseISO(redsWindow.start), 'd MMM')} – ${format(parseISO(redsWindow.end), 'd MMM')}`
-            : 'Last completed Mon–Sun week'}
-        </p>
+        <div className="text-right">
+          <p className="text-xs text-gray-500">
+            {redsWindow
+              ? `${format(parseISO(redsWindow.start), 'd MMM')} – ${format(parseISO(redsWindow.end), 'd MMM')}`
+              : 'Last completed Mon–Sun week'}
+          </p>
+          {redsWindow?.generatedAt && (
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              Generated {format(parseISO(redsWindow.generatedAt), 'EEE d MMM, h:mma')}
+              {redsWindow.nextRefresh && (
+                <> · Next {format(parseISO(redsWindow.nextRefresh), 'EEE d MMM, h:mma')}</>
+              )}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Search */}
@@ -108,7 +120,7 @@ export default function RedsList({ data, loading, error, contactLog, onboardingI
           <div className="py-12 text-center">
             <CheckCircle className="h-8 w-8 text-orange-500/40 mx-auto mb-2" />
             <p className="text-sm text-gray-500">
-              {search ? 'No matches found' : "Red's list is clear"}
+              {search ? 'No matches found' : 'Red Flag List is clear'}
             </p>
           </div>
         )}
