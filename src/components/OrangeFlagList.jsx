@@ -5,11 +5,11 @@ import ContactModal          from './ContactModal.jsx';
 import WeeklyAttendancePanel from './WeeklyAttendancePanel.jsx';
 
 /**
- * Orange Flag — mid-week early-warning list.
+ * Orange Flag List — short-notice early-warning list.
  *
- * Active clients who trained in the last four completed weeks but have zero
- * visits from Monday through Wednesday of the CURRENT week. Meant to be checked
- * on a Wednesday. Window is fixed (Mon–Wed of this week) — no date toggle.
+ * Active clients on an eligible membership with zero signed-in visits across
+ * the previous 2 full days (Sydney time). Regenerated every morning at 1am
+ * Sydney and frozen for the day — never recalculated on page load or Sync.
  */
 
 function TrendBadge({ trend }) {
@@ -69,18 +69,28 @@ export default function OrangeFlagList({ data, loading, error, contactLog, onboa
       <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-800">
         <div className="flex items-center gap-2">
           <Flag className="h-4 w-4 text-orange-400" />
-          <h2 className="font-semibold text-white">Orange Flag</h2>
+          <h2 className="font-semibold text-white">Orange Flag List</h2>
           {!loading && (
             <span className="rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-400 border border-orange-500/20">
               {clients.length}
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-500">
-          {flagWindow
-            ? `No visits ${format(parseISO(flagWindow.start), 'd MMM')} – ${format(parseISO(flagWindow.end), 'd MMM')}`
-            : 'No visits Mon–Wed this week'}
-        </p>
+        <div className="text-right">
+          <p className="text-xs text-gray-500">
+            {flagWindow
+              ? `No visits ${format(parseISO(flagWindow.start), 'd MMM')} – ${format(parseISO(flagWindow.end), 'd MMM')}`
+              : 'No visits in the last 2 full days'}
+          </p>
+          {flagWindow?.generatedAt && (
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              Generated {format(parseISO(flagWindow.generatedAt), 'EEE d MMM, h:mma')}
+              {flagWindow.nextRefresh && (
+                <> · Next {format(parseISO(flagWindow.nextRefresh), 'EEE d MMM, h:mma')}</>
+              )}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Search */}
@@ -115,7 +125,7 @@ export default function OrangeFlagList({ data, loading, error, contactLog, onboa
           <div className="py-12 text-center">
             <CheckCircle className="h-8 w-8 text-orange-500/40 mx-auto mb-2" />
             <p className="text-sm text-gray-500">
-              {search ? 'No matches found' : 'No orange flags this week'}
+              {search ? 'No matches found' : 'No orange flags for this window'}
             </p>
           </div>
         )}
