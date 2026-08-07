@@ -16,7 +16,7 @@
  *   suspensions      – clients with active SuspensionInfo or hold-type status
  *                       (excludes Terminated, Expired, Non Member)
  */
-import { getStore } from '@netlify/blobs';
+import { getBlobStore } from './utils/blob-store.js';
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
 import { subDays, addDays, endOfDay, format, parseISO, startOfWeek, endOfWeek, subWeeks } from 'date-fns';
 
@@ -40,29 +40,43 @@ const FLAG_STORE = 'flag-lists';
 const RED_KEY    = 'red-flag-snapshot';
 const ORANGE_KEY = 'orange-flag-snapshot';
 
-// Only these memberships are eligible for either flag list. Matched
-// case-insensitively with whitespace trimmed — everything else (including any
-// "2x sessions" membership) is excluded.
-const ALLOWED_MEMBERSHIPS = new Set([
-  'unlimited membership - weekly',
-  'unlimited class pass - monthly',
-  'unlimited class pass - fortnightly',
-  'g3 3x sessions per week',
-]);
+// Only these 4 membership categories are eligible for either flag list.
+// Real Mindbody contract names carry pricing/formatting noise the spec names
+// don't — e.g. "G3 Unlimited Membership| $69.95 Weekly" or "G3 3 x Sessions
+// Per Week | $57.95 Weekly" — so classification is by keyword, not literal
+// string equality. Anything else, including any "x2"/"2x sessions" pass,
+// returns null and is excluded.
 
 // Safety cap on how many zero-visit clients we run contract lookups for in a
 // single generation run (1 API call each) — generous, but bounded.
 const FLAG_MAX_CONTRACT_LOOKUPS = 500;
 
-function isAllowedMembership(name) {
-  return ALLOWED_MEMBERSHIPS.has(String(name || '').trim().toLowerCase());
+function classifyMembership(rawName) {
+  const n = String(rawName || '').toLowerCase();
+
+  // "G3 3 x Sessions Per Week" / "G3 3x Sessions Per Week" (either spacing)
+  if (/3\s*x\s*sessions?\s*per\s*week/.test(n)) {
+    return 'G3 3x Sessions Per Week';
+  }
+
+  // Unlimited memberships, distinguished by billing frequency
+  if (n.includes('unlimited')) {
+    if (n.includes('weekly'))      return 'Unlimited Membership - Weekly';
+    if (n.includes('fortnightly')) return 'Unlimited Class Pass - Fortnightly';
+    if (n.includes('monthly'))     return 'Unlimited Class Pass - Monthly';
+  }
+
+  return null;
 }
 
 // Active, non-suspended, non-cancelled members only.
 function isEligibleMember(c) {
   if (!c) return false;
   if ((c.status || '').toLowerCase() !== 'active') return false;
-  if (c.suspensionInfo && Object.keys(c.suspensionInfo).length > 0) return false;
+  // Mindbody always returns a SuspensionInfo object for active clients, even
+  // when not suspended (e.g. {BookingSuspended:false, ...}) — only the
+  // BookingSuspended flag itself indicates an actual, current suspension.
+  if (c.suspensionInfo?.BookingSuspended === true) return false;
   return true;
 }
 
@@ -131,7 +145,7 @@ function currentMembershipName(contracts, asOf) {
 
 async function readFlagSnapshot(key) {
   try {
-    const store = getStore(FLAG_STORE);
+    const store = getBlobStore(FLAG_STORE);
     const raw   = await store.get(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
@@ -141,7 +155,7 @@ async function readFlagSnapshot(key) {
 
 async function writeFlagSnapshot(key, snapshot) {
   try {
-    const store = getStore(FLAG_STORE);
+    const store = getBlobStore(FLAG_STORE);
     await store.set(key, JSON.stringify(snapshot));
   } catch (e) {
     console.error(`[mb-client-analytics] Failed to persist ${key}:`, e.message);
@@ -361,9 +375,10 @@ async function generateFlagList(token, windowInfo) {
     const batch   = capped.slice(i, i + BATCH);
     const results = await Promise.allSettled(batch.map((c) => getClientContractsList(token, c.id)));
     batch.forEach((c, idx) => {
-      const contracts  = results[idx].status === 'fulfilled' ? results[idx].value : [];
-      const membership = currentMembershipName(contracts, asOf);
-      if (!isAllowedMembership(membership)) return; // only the 4 allowed memberships qualify
+      const contracts     = results[idx].status === 'fulfilled' ? results[idx].value : [];
+      const rawMembership = currentMembershipName(contracts, asOf);
+      const membership    = classifyMembership(rawMembership);
+      if (!membership) return; // only the 4 allowed membership categories qualify
       clients.push({
         id:         c.id,
         name:       c.name,
@@ -430,6 +445,18 @@ export const handler = async (event) => {
     if (event.httpMethod === 'POST') {
       await maybeRefreshFlagLists(token);
       return ok({ scheduled: true, checkedAt: new Date().toISOString() });
+    }
+
+    // Manual test trigger — e.g. GET /api/mb-client-analytics?forceFlags=both
+    // Bypasses the 1am/Monday schedule so the lists can be spot-checked without
+    // waiting for the next real run. Normal page loads never send this param,
+    // so day-to-day behaviour (frozen snapshots, untouched by Sync) is unchanged.
+    const forceFlags = event.queryStringParameters?.forceFlags;
+    if (forceFlags === 'red' || forceFlags === 'both') {
+      await writeFlagSnapshot(RED_KEY, await generateFlagList(token, computeRedFlagWindow()));
+    }
+    if (forceFlags === 'orange' || forceFlags === 'both') {
+      await writeFlagSnapshot(ORANGE_KEY, await generateFlagList(token, computeOrangeFlagWindow()));
     }
 
     const now    = new Date();

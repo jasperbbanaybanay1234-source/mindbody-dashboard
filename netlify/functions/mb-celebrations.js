@@ -8,7 +8,7 @@
  *   milestones        – active members within 10 sessions of a lifetime
  *                       session-count milestone (50, 100, … 1000)
  */
-import { getStore } from '@netlify/blobs';
+import { getBlobStore } from './utils/blob-store.js';
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
 
 const WINDOW_DAYS = 30;
@@ -22,7 +22,7 @@ const WINDOW_DAYS = 30;
 // actual computation.
 async function getCachedMilestones() {
   try {
-    const store = getStore('dashboard-cache');
+    const store = getBlobStore('dashboard-cache');
     const raw   = await store.get('dashboard-snapshot');
     if (!raw) return [];
     const snapshot = JSON.parse(raw);

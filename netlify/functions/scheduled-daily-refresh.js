@@ -5,7 +5,7 @@
  * Calls Mindbody directly (same logic as the individual endpoints) rather than
  * HTTP-calling the other functions, which would create a timeout chain.
  */
-import { getStore } from '@netlify/blobs';
+import { getBlobStore } from './utils/blob-store.js';
 import { getStaffToken, mbGet } from './utils/mb-auth.js';
 import {
   subDays, format, parseISO,
@@ -167,7 +167,7 @@ export const handler = async () => {
   console.log('[scheduled-daily-refresh] Starting at', new Date().toISOString());
   try {
     const token = await getStaffToken();
-    const store = getStore('dashboard-cache');
+    const store = getBlobStore('dashboard-cache');
 
     // Read yesterday's snapshot first so a single failed fetch tonight
     // doesn't wipe out otherwise-good cached data for that section.

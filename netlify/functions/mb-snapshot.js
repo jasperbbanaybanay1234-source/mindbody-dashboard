@@ -4,7 +4,7 @@
  *
  * If no cache exists (first ever load) a live fetch is triggered automatically.
  */
-import { getStore } from '@netlify/blobs';
+import { getBlobStore } from './utils/blob-store.js';
 import { ok, err, CORS } from './utils/mb-auth.js';
 
 const STORE_KEY = 'dashboard-snapshot';
@@ -31,7 +31,7 @@ export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
 
   try {
-    const store = getStore('dashboard-cache');
+    const store = getBlobStore('dashboard-cache');
 
     // Force refresh (manual Refresh button)
     if (event.httpMethod === 'POST') {

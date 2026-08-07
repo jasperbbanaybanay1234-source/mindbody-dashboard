@@ -8,7 +8,7 @@
  *   → toggles the task (add if missing, remove if present)
  *   → { completions: { ... } }
  */
-import { getStore } from '@netlify/blobs';
+import { getBlobStore } from './utils/blob-store.js';
 import { ok, err, CORS } from './utils/mb-auth.js';
 
 const STORE_KEY = 'completions';
@@ -17,7 +17,7 @@ export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
 
   try {
-    const store = getStore('onboarding-tasks');
+    const store = getBlobStore('onboarding-tasks');
 
     if (event.httpMethod === 'GET') {
       const raw = await store.get(STORE_KEY);
