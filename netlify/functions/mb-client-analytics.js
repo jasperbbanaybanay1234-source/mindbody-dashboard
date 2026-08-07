@@ -1,23 +1,30 @@
 /**
- * 28-day rolling window, split into 4 weekly buckets.
+ * 28-day rolling window, split into 4 weekly buckets — drives fringe / no-shows / stats.
  * Supports ?period=7days (default) or ?period=calendarWeek (last Mon–Sun).
- * NOTE: ?period only affects fringe / no-shows / stats. Red's List and the
- * Orange Flag list always use their own fixed, Monday-anchored windows.
+ *
+ * Red Flag List and Orange Flag List are NOT computed on this live path. They are
+ * generated on a fixed Sydney-time schedule (Red: Mondays at 1am; Orange: every
+ * morning at 1am) and persisted to Netlify Blobs. Every normal request — including
+ * a manual "Sync" — just reads whatever snapshot is currently frozen there. See
+ * `maybeRefreshFlagLists()` below for the generation logic itself.
  *
  * Returns:
- *   reds        – visited in the 3 weeks before the last completed Mon–Sun week
- *                 but NOT during that week (Red's List = inactive + churning).
- *                 Window is ALWAYS the most recently completed Mon–Sun week.
- *   orangeFlag  – active clients who attended in the last 4 completed weeks but
- *                 have zero visits Mon–Wed of the CURRENT (in-progress) week.
- *   fringe      – visited W1, segmented by count (atRisk/engaged)
- *                 each client carries: sessionsThisWeek, trend, service, isFullyUtilising
- *   noShows     – clients with unsigned bookings in W1 window
- *   suspensions – clients with active SuspensionInfo or hold-type status
- *                 (excludes Terminated, Expired, Non Member)
+ *   reds/orangeFlag  – read from frozen Blobs snapshots (see header notes above)
+ *   fringe           – visited W1, segmented by count (atRisk/engaged)
+ *                       each client carries: sessionsThisWeek, trend, service, isFullyUtilising
+ *   noShows          – clients with unsigned bookings in W1 window
+ *   suspensions      – clients with active SuspensionInfo or hold-type status
+ *                       (excludes Terminated, Expired, Non Member)
  */
+import { getStore } from '@netlify/blobs';
 import { getStaffToken, mbGet, ok, err, CORS, formatPhone } from './utils/mb-auth.js';
 import { subDays, addDays, endOfDay, format, parseISO, startOfWeek, endOfWeek, subWeeks } from 'date-fns';
+
+// Runs every hour so the 1am-Sydney check below stays correct across DST
+// transitions (a fixed UTC cron time would drift by an hour twice a year).
+export const config = {
+  schedule: '0 * * * *',
+};
 
 const BATCH = 40; // raised from 15 - classvisits calls are the real bottleneck on real data volume
 
@@ -26,6 +33,191 @@ const BATCH = 40; // raised from 15 - classvisits calls are the real bottleneck 
 const EXCLUDED_SUSPENSION_STATUSES = new Set([
   'active', 'terminated', 'expired', 'non member', 'non-member', 'declined',
 ]);
+
+// ─── Red Flag List / Orange Flag List — memberships + Netlify Blobs storage ───
+
+const FLAG_STORE = 'flag-lists';
+const RED_KEY    = 'red-flag-snapshot';
+const ORANGE_KEY = 'orange-flag-snapshot';
+
+// Only these memberships are eligible for either flag list. Matched
+// case-insensitively with whitespace trimmed — everything else (including any
+// "2x sessions" membership) is excluded.
+const ALLOWED_MEMBERSHIPS = new Set([
+  'unlimited membership - weekly',
+  'unlimited class pass - monthly',
+  'unlimited class pass - fortnightly',
+  'g3 3x sessions per week',
+]);
+
+// Safety cap on how many zero-visit clients we run contract lookups for in a
+// single generation run (1 API call each) — generous, but bounded.
+const FLAG_MAX_CONTRACT_LOOKUPS = 500;
+
+function isAllowedMembership(name) {
+  return ALLOWED_MEMBERSHIPS.has(String(name || '').trim().toLowerCase());
+}
+
+// Active, non-suspended, non-cancelled members only.
+function isEligibleMember(c) {
+  if (!c) return false;
+  if ((c.status || '').toLowerCase() !== 'active') return false;
+  if (c.suspensionInfo && Object.keys(c.suspensionInfo).length > 0) return false;
+  return true;
+}
+
+async function getClientContractsList(token, clientId) {
+  try {
+    const data = await mbGet('/client/clientcontracts', token, { clientId, Limit: 50 });
+    return data.ClientContracts || data.Contracts || [];
+  } catch {
+    return [];
+  }
+}
+
+function contractName(c = {}) {
+  return (
+    c.ContractName || c.contractName ||
+    c.Name         || c.name         ||
+    c.ContractDescription || c.contractDescription ||
+    c.Description  || c.description ||
+    ''
+  );
+}
+
+function contractStartDate(c = {}) {
+  const raw =
+    c.StartDate       || c.startDate       ||
+    c.AgreementDate   || c.agreementDate   ||
+    c.ActiveDate      || c.activeDate      ||
+    c.OriginationDate || c.originationDate ||
+    null;
+  if (!raw) return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function contractEndDate(c = {}) {
+  const raw = c.ExpirationDate || c.expirationDate || c.EndDate || c.endDate || null;
+  if (!raw) return null;
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Picks the contract that's currently active as of `asOf`; falls back to the
+// most recently started contract if none cleanly straddle that date.
+function currentMembershipName(contracts, asOf) {
+  let active = null;
+  for (const c of contracts) {
+    const start = contractStartDate(c);
+    const end   = contractEndDate(c);
+    if (start && start > asOf) continue;
+    if (end && end < asOf) continue;
+    if (!active || (start && (!active.start || start > active.start))) {
+      active = { start, name: contractName(c) };
+    }
+  }
+  if (active) return active.name;
+
+  let latest = null;
+  for (const c of contracts) {
+    const start = contractStartDate(c);
+    if (!latest || (start && (!latest.start || start > latest.start))) {
+      latest = { start, name: contractName(c) };
+    }
+  }
+  return latest ? latest.name : '';
+}
+
+async function readFlagSnapshot(key) {
+  try {
+    const store = getStore(FLAG_STORE);
+    const raw   = await store.get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeFlagSnapshot(key, snapshot) {
+  try {
+    const store = getStore(FLAG_STORE);
+    await store.set(key, JSON.stringify(snapshot));
+  } catch (e) {
+    console.error(`[mb-client-analytics] Failed to persist ${key}:`, e.message);
+  }
+}
+
+// ─── Sydney time helpers ────────────────────────────────────────────────────
+// Only "now" (the instant the function runs) needs real timezone conversion —
+// Intl handles AEST/AEDT automatically. Window boundaries are then built from
+// plain calendar-day arithmetic (safe across DST) and rendered the same
+// UTC-as-wall-clock way the rest of this file already uses.
+
+const WEEKDAY_NUM = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+
+function sydneyNow(date = new Date()) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
+  });
+  const parts = {};
+  for (const p of dtf.formatToParts(date)) parts[p.type] = p.value;
+  return {
+    year:    Number(parts.year),
+    month:   Number(parts.month),
+    day:     Number(parts.day),
+    hour:    Number(parts.hour === '24' ? '0' : parts.hour),
+    minute:  Number(parts.minute),
+    weekday: parts.weekday, // 'Mon' | 'Tue' | ... | 'Sun'
+  };
+}
+
+function calShift(year, month, day, deltaDays) {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
+function dateAt(y, m, d, hh = 0, mm = 0, ss = 0) {
+  return new Date(Date.UTC(y, m - 1, d, hh, mm, ss));
+}
+
+function dateKey(y, m, d) {
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// Red Flag window = the most recently completed Monday–Sunday, Sydney time.
+function computeRedFlagWindow(now = new Date()) {
+  const p = sydneyNow(now);
+  const wd = WEEKDAY_NUM[p.weekday];
+  const thisMonday = calShift(p.year, p.month, p.day, -(wd - 1));
+  const lastMonday = calShift(thisMonday.year, thisMonday.month, thisMonday.day, -7);
+  const lastSunday = calShift(thisMonday.year, thisMonday.month, thisMonday.day, -1);
+  const nextMonday = calShift(thisMonday.year, thisMonday.month, thisMonday.day, 7);
+  return {
+    key:         dateKey(lastMonday.year, lastMonday.month, lastMonday.day),
+    windowStart: dateAt(lastMonday.year, lastMonday.month, lastMonday.day, 0, 0, 0),
+    windowEnd:   dateAt(lastSunday.year, lastSunday.month, lastSunday.day, 23, 59, 59),
+    nextRefresh: dateAt(nextMonday.year, nextMonday.month, nextMonday.day, 1, 0, 0),
+  };
+}
+
+// Orange Flag window = the previous 2 full days, Sydney time
+// (e.g. a Wednesday 1am run covers Monday + Tuesday).
+function computeOrangeFlagWindow(now = new Date()) {
+  const p = sydneyNow(now);
+  const dayBefore = calShift(p.year, p.month, p.day, -2);
+  const yesterday = calShift(p.year, p.month, p.day, -1);
+  const tomorrow  = calShift(p.year, p.month, p.day, 1);
+  return {
+    key:         dateKey(p.year, p.month, p.day),
+    windowStart: dateAt(dayBefore.year, dayBefore.month, dayBefore.day, 0, 0, 0),
+    windowEnd:   dateAt(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59),
+    nextRefresh: dateAt(tomorrow.year, tomorrow.month, tomorrow.day, 1, 0, 0),
+  };
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -123,13 +315,123 @@ function trend(w1, w2, w3, w4) {
   return { avg: rounded, direction: 'stable' };
 }
 
+// ─── Red Flag List / Orange Flag List generation ───────────────────────────
+
+async function fetchVisitedSet(token, windowStart, windowEnd) {
+  const startStr = format(windowStart, "yyyy-MM-dd'T'00:00:00");
+  const endStr   = format(windowEnd,   "yyyy-MM-dd'T'23:59:59");
+  const classes  = await getClasses(token, startStr, endStr);
+  const visited  = new Set();
+  for (let i = 0; i < classes.length; i += BATCH) {
+    const batch   = classes.slice(i, i + BATCH);
+    const results = await Promise.allSettled(batch.map((cls) => getVisits(token, cls.Id)));
+    results.forEach((r) => {
+      if (r.status !== 'fulfilled') return;
+      for (const visit of r.value) {
+        if (visit.SignedIn === true && !visit.LateCancelled) {
+          const id = String(visit.ClientId || '');
+          if (id) visited.add(id);
+        }
+      }
+    });
+  }
+  return visited;
+}
+
+// Shared generator for both lists — the only difference between Red and
+// Orange is which window is passed in.
+async function generateFlagList(token, windowInfo) {
+  const { windowStart, windowEnd, nextRefresh, key } = windowInfo;
+
+  const [clientMap, visitedSet] = await Promise.all([
+    getAllClients(token),
+    fetchVisitedSet(token, windowStart, windowEnd),
+  ]);
+
+  // Zero signed-in visits in the window + still an active, non-suspended member.
+  const zeroVisitEligible = Object.values(clientMap).filter(
+    (c) => isEligibleMember(c) && !visitedSet.has(c.id)
+  );
+
+  const capped  = zeroVisitEligible.slice(0, FLAG_MAX_CONTRACT_LOOKUPS);
+  const asOf    = new Date();
+  const clients = [];
+
+  for (let i = 0; i < capped.length; i += BATCH) {
+    const batch   = capped.slice(i, i + BATCH);
+    const results = await Promise.allSettled(batch.map((c) => getClientContractsList(token, c.id)));
+    batch.forEach((c, idx) => {
+      const contracts  = results[idx].status === 'fulfilled' ? results[idx].value : [];
+      const membership = currentMembershipName(contracts, asOf);
+      if (!isAllowedMembership(membership)) return; // only the 4 allowed memberships qualify
+      clients.push({
+        id:         c.id,
+        name:       c.name,
+        email:      c.email,
+        phone:      c.phone,
+        membership,
+      });
+    });
+  }
+
+  clients.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  return {
+    key,
+    windowStart: windowStart.toISOString(),
+    windowEnd:   windowEnd.toISOString(),
+    generatedAt: new Date().toISOString(),
+    nextRefresh: nextRefresh.toISOString(),
+    clients,
+  };
+}
+
+// Called on every hourly scheduled invocation; only actually regenerates
+// anything during the 1am-Sydney hour, and only once per due cycle (guarded
+// by comparing the stored snapshot's `key` to the freshly computed window's
+// `key`, so a retry within the same hour is a no-op).
+async function maybeRefreshFlagLists(token) {
+  const now = new Date();
+  const p   = sydneyNow(now);
+  if (p.hour !== 1) return;
+
+  // Orange Flag List — every morning.
+  const orangeWindow   = computeOrangeFlagWindow(now);
+  const existingOrange = await readFlagSnapshot(ORANGE_KEY);
+  if (existingOrange?.key !== orangeWindow.key) {
+    const snapshot = await generateFlagList(token, orangeWindow);
+    await writeFlagSnapshot(ORANGE_KEY, snapshot);
+    console.log(`[mb-client-analytics] Orange Flag List regenerated for ${orangeWindow.key} (${snapshot.clients.length} clients)`);
+  }
+
+  // Red Flag List — Mondays only.
+  if (p.weekday === 'Mon') {
+    const redWindow   = computeRedFlagWindow(now);
+    const existingRed = await readFlagSnapshot(RED_KEY);
+    if (existingRed?.key !== redWindow.key) {
+      const snapshot = await generateFlagList(token, redWindow);
+      await writeFlagSnapshot(RED_KEY, snapshot);
+      console.log(`[mb-client-analytics] Red Flag List regenerated for ${redWindow.key} (${snapshot.clients.length} clients)`);
+    }
+  }
+}
+
 // ─── Handler ────────────────────────────────────────────────────────────────
 
 export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
 
   try {
-    const token  = await getStaffToken();
+    const token = await getStaffToken();
+
+    // Netlify's scheduler invokes this function via POST. Do only the
+    // Red/Orange Flag List check-and-regenerate here, and nothing else —
+    // every other metric on this dashboard is unaffected by this branch.
+    if (event.httpMethod === 'POST') {
+      await maybeRefreshFlagLists(token);
+      return ok({ scheduled: true, checkedAt: new Date().toISOString() });
+    }
+
     const now    = new Date();
     const period = event.queryStringParameters?.period || '7days';
 
@@ -149,43 +451,13 @@ export const handler = async (event) => {
     const b21 = subDays(w1Start, 14);
     const b28 = subDays(w1Start, 21);
 
-    // ── Red's List window — ALWAYS the most recently completed Mon–Sun week ─
-    // (independent of ?period so the list is stable for everyone who opens it)
-    const rw1Start = startOfWeek(subWeeks(now, 1), { weekStartsOn: 1 });
-    const rw1End   = endOfWeek(subWeeks(now, 1),   { weekStartsOn: 1 });
-    const rb14 = subDays(rw1Start, 7);
-    const rb21 = subDays(rw1Start, 14);
-    const rb28 = subDays(rw1Start, 21);
-
-    // ── Orange Flag window — Mon 00:00 → Wed 23:59 of the CURRENT week ─────
-    // Fetched as its own small, separate request (at most 3 days of classes)
-    // rather than folded into the main range below — keeps the main fetch the
-    // same size it always was, since the current in-progress week is not
-    // needed for reds/fringe/no-shows and would otherwise widen every request.
-    const ofStart = startOfWeek(now, { weekStartsOn: 1 });
-    const ofEnd   = endOfDay(addDays(ofStart, 2));
-
-    // Fetch wide enough to cover reds + fringe/no-shows only (unchanged size)
-    const fetchStart = b28 < rb28 ? b28 : rb28;
-    const fetchEnd    = w1End > rw1End ? w1End : rw1End;
-
-    const startStr = format(fetchStart, "yyyy-MM-dd'T'00:00:00");
-    const endStr   = format(fetchEnd,   "yyyy-MM-dd'T'23:59:59");
+    const startStr = format(b28,  "yyyy-MM-dd'T'00:00:00");
+    const endStr   = format(w1End, "yyyy-MM-dd'T'23:59:59");
 
     const allClasses = await getClasses(token, startStr, endStr);
 
-    // Small dedicated fetch for the Orange Flag Mon–Wed window only. Skipped
-    // entirely once Wed has passed for the week and it's earlier than fetchEnd
-    // isn't relevant here — it's always current-week, so always a fresh, tiny
-    // request (at most 3 days) regardless of what day it is.
-    const ofStartStr = format(ofStart, "yyyy-MM-dd'T'00:00:00");
-    const ofEndStr   = format(ofEnd,   "yyyy-MM-dd'T'23:59:59");
-    const ofClasses  = await getClasses(token, ofStartStr, ofEndStr);
-
     // Per-client data structures
     const weeks         = {};  // id → { w1, w2, w3, w4 }  (period-driven buckets)
-    const redWeeks      = {};  // id → { w1, w2, w3, w4 }  (fixed Mon-anchored buckets)
-    const monWedCount   = {};  // id → visits Mon–Wed of the current week
     const services      = {};  // id → most-recent service name
     const noShowMap     = {};  // id → [{ className, day, time, staffName }]
     const lastVisitDate = {};  // id → most recent signed-in Date
@@ -204,29 +476,17 @@ export const handler = async (event) => {
         const inW3 = !inW1 && !inW2 && classDate > b21 && classDate <= w1End;
         const inW4 = !inW1 && !inW2 && !inW3 && classDate > b28 && classDate <= w1End;
 
-        // Fixed Mon-anchored buckets (Red's List / Orange Flag "was active" test)
-        const inR1 = classDate >= rw1Start && classDate <= rw1End;
-        const inR2 = !inR1 && classDate > rb14 && classDate <= rw1End;
-        const inR3 = !inR1 && !inR2 && classDate > rb21 && classDate <= rw1End;
-        const inR4 = !inR1 && !inR2 && !inR3 && classDate > rb28 && classDate <= rw1End;
-
         for (const visit of results[idx].value) {
           const id = String(visit.ClientId || '');
           if (!id) continue;
 
-          if (!weeks[id])    weeks[id]    = { w1: 0, w2: 0, w3: 0, w4: 0 };
-          if (!redWeeks[id]) redWeeks[id] = { w1: 0, w2: 0, w3: 0, w4: 0 };
+          if (!weeks[id]) weeks[id] = { w1: 0, w2: 0, w3: 0, w4: 0 };
 
           if (visit.SignedIn === true && !visit.LateCancelled) {
             if (inW1) weeks[id].w1++;
             if (inW2) weeks[id].w2++;
             if (inW3) weeks[id].w3++;
             if (inW4) weeks[id].w4++;
-
-            if (inR1) redWeeks[id].w1++;
-            if (inR2) redWeeks[id].w2++;
-            if (inR3) redWeeks[id].w3++;
-            if (inR4) redWeeks[id].w4++;
 
             // Track the most recent service name (W1 priority)
             if (inW1 && visit.ServiceName) services[id] = visit.ServiceName;
@@ -252,24 +512,6 @@ export const handler = async (event) => {
       });
     }
 
-    // Small separate pass just for the Orange Flag Mon–Wed window (at most a
-    // handful of classes, so this stays fast even though it's a second loop).
-    for (let i = 0; i < ofClasses.length; i += BATCH) {
-      const batch   = ofClasses.slice(i, i + BATCH);
-      const results = await Promise.allSettled(batch.map((cls) => getVisits(token, cls.Id)));
-      batch.forEach((cls, idx) => {
-        if (results[idx].status !== 'fulfilled') return;
-        const classDate = parseISO(cls.StartDateTime);
-        if (classDate < ofStart || classDate > ofEnd) return;
-        for (const visit of results[idx].value) {
-          const id = String(visit.ClientId || '');
-          if (!id) continue;
-          if (monWedCount[id] === undefined) monWedCount[id] = 0;
-          if (visit.SignedIn === true && !visit.LateCancelled) monWedCount[id]++;
-        }
-      });
-    }
-
     // Fetch all clients for enrichment
     const clientMap = await getAllClients(token);
 
@@ -286,50 +528,6 @@ export const handler = async (event) => {
       // package name) so lists can label it as the client's membership.
       return { ...c, service: svc, membership: svc, trend: t, is2xMember: is2x, isFullyUtilising: isFullyUtil, lastSessionDate: lastDate, weeklyAttendance, ...extra };
     }
-
-    // Only active, non-suspended contract members qualify for Red's / Orange Flag
-    function isActiveMember(id) {
-      const c = clientMap[id];
-      if (!c) return false;
-      if ((c.status || '').toLowerCase() !== 'active') return false;
-      if (c.suspensionInfo && Object.keys(c.suspensionInfo).length > 0) return false;
-      return true;
-    }
-
-    // Red's List: visited R2–R4 but NOT R1, where R1 is ALWAYS the most recently
-    // completed Monday–Sunday week. Active contract only, not suspended.
-    const redVisitedW1 = new Set(Object.keys(redWeeks).filter((id) => redWeeks[id].w1 > 0));
-    const redVisitedPrev = new Set(
-      Object.keys(redWeeks).filter((id) => redWeeks[id].w2 > 0 || redWeeks[id].w3 > 0 || redWeeks[id].w4 > 0)
-    );
-    const reds = [...redVisitedPrev]
-      .filter((id) => !redVisitedW1.has(id))
-      .filter(isActiveMember)
-      .map((id) => enrichClient(id, { sessionsThisWeek: 0 }, redWeeks))
-      // Sort: most recently seen first → longest absent last
-      .sort((a, b) => {
-        if (!a.lastSessionDate && !b.lastSessionDate) return 0;
-        if (!a.lastSessionDate) return 1;
-        if (!b.lastSessionDate) return -1;
-        return b.lastSessionDate.localeCompare(a.lastSessionDate);
-      });
-
-    // Orange Flag: previously active (any of the last 4 completed weeks) but ZERO
-    // visits Mon–Wed of the CURRENT week. A mid-week early-warning signal.
-    const orangeFlag = Object.keys(redWeeks)
-      .filter((id) => {
-        const w = redWeeks[id];
-        return w.w1 > 0 || w.w2 > 0 || w.w3 > 0 || w.w4 > 0;
-      })
-      .filter((id) => (monWedCount[id] || 0) === 0)
-      .filter(isActiveMember)
-      .map((id) => enrichClient(id, { sessionsThisWeek: 0, monWedSessions: 0 }, redWeeks))
-      .sort((a, b) => {
-        if (!a.lastSessionDate && !b.lastSessionDate) return 0;
-        if (!a.lastSessionDate) return 1;
-        if (!b.lastSessionDate) return -1;
-        return b.lastSessionDate.localeCompare(a.lastSessionDate);
-      });
 
     // Existing period-driven W1 sets (fringe / stats)
     const visitedW1 = new Set(Object.keys(weeks).filter((id) => weeks[id].w1 > 0));
@@ -416,25 +614,37 @@ export const handler = async (event) => {
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, 100);
 
+    // Red Flag List / Orange Flag List — read whatever is currently frozen in
+    // Blobs. Never (re)computed on this live path, so a manual Sync or page
+    // load never changes these two lists.
+    const [redSnap, orangeSnap] = await Promise.all([
+      readFlagSnapshot(RED_KEY),
+      readFlagSnapshot(ORANGE_KEY),
+    ]);
+
     return ok({
       period,
-      reds:           reds.slice(0, 150),
-      orangeFlag:     orangeFlag.slice(0, 150),
+      reds:           redSnap?.clients    || [],
+      orangeFlag:     orangeSnap?.clients || [],
       fringeSegments,
       noShows,
       suspensions,
       declinedClients,
-      redsWindow: {
-        start: format(rw1Start, 'yyyy-MM-dd'),
-        end:   format(rw1End,   'yyyy-MM-dd'),
-      },
-      orangeFlagWindow: {
-        start: format(ofStart, 'yyyy-MM-dd'),
-        end:   format(ofEnd,   'yyyy-MM-dd'),
-      },
+      redsWindow: redSnap ? {
+        start:       redSnap.windowStart,
+        end:         redSnap.windowEnd,
+        generatedAt: redSnap.generatedAt,
+        nextRefresh: redSnap.nextRefresh,
+      } : null,
+      orangeFlagWindow: orangeSnap ? {
+        start:       orangeSnap.windowStart,
+        end:         orangeSnap.windowEnd,
+        generatedAt: orangeSnap.generatedAt,
+        nextRefresh: orangeSnap.nextRefresh,
+      } : null,
       summary: {
-        redsCount:        reds.length,
-        orangeFlagCount:  orangeFlag.length,
+        redsCount:        redSnap?.clients?.length    || 0,
+        orangeFlagCount:  orangeSnap?.clients?.length  || 0,
         visitedThisWeek:  visitedW1.size,
         noShowCount:      noShows.length,
         suspensionCount:  suspensions.length,
